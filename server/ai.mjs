@@ -100,6 +100,10 @@ export async function callAiJson({ config, prompt, image, schema, schemaName, ma
       result = await attempt({ type: 'json_object' })
     }
   } catch (error) {
+    // Never log the key; provider + model + failure kind is enough to
+    // diagnose a dead key or a wrong endpoint from the server console.
+    console.error(`[ai] provider=${config.provider} model=${config.model} request failed: ${error?.name ?? 'Error'}`)
+    
     if (timeout.aborted) {
       throw new LessonError(504, 'AI_TIMEOUT', timeoutMessage)
     }
@@ -108,6 +112,9 @@ export async function callAiJson({ config, prompt, image, schema, schemaName, ma
     throw new LessonError(502, 'AI_UPSTREAM_ERROR', 'Không kết nối được với dịch vụ AI. Vui lòng thử lại.')
   }
 
+  if (result.status !== 200 || !result.payload) {
+    console.error(`[ai] provider=${config.provider} model=${config.model} upstream status=${result.status}`)
+  }
   if (result.status === 429) {
     throw new LessonError(503, 'AI_UNAVAILABLE', 'AI đang bận hoặc đã hết lượt miễn phí. Vui lòng thử lại sau.')
   }

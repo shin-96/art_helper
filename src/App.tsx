@@ -195,6 +195,10 @@ export default function App() {
           if (partsResponse.ok && Array.isArray(partsResult.parts) && partsResult.parts.length) {
             setAiParts(partsResult.parts as SemanticPart[])
             setApiMessage(`AI đã nhận diện ${partsResult.parts.length} bộ phận (${partsResult.parts.map((part: SemanticPart) => part.name).join(', ')}) và gắn tên vào từng khối, từng nét của bài.`)
+          } else if (!partsResponse.ok && partsResult.code !== 'AI_NOT_CONFIGURED') {
+            // A silent fallback here once hid every provider failure behind
+            // local labels; name the failure so it can actually be fixed.
+            setApiMessage(`AI chưa chia được bộ phận (${partsResult.code || `HTTP ${partsResponse.status}`}): ${partsResult.error || 'không rõ lỗi'} Bài vẫn dùng nhãn local — xem log máy chủ để biết nhà cung cấp trả lỗi gì.`)
           }
         } catch { /* Part naming is optional; local labels remain. */ }
       }
