@@ -162,6 +162,29 @@ export default function App() {
     setApiMessage('')
     setAiParts(null)
     setLoading(true)
+    // Part naming runs in PARALLEL with the written lesson and applies the
+    // moment it lands: the lesson is a long, strict generation that can
+    // take a minute or fail validation outright, and the part names — the
+    // labels on every block and stroke — must not wait behind it.
+    // Whichever flow finishes first claims the banner line.
+    let bannerTaken = false
+    const takeBanner = (text: string) => { if (!bannerTaken) { bannerTaken = true; setApiMessage(text) } }
+    void (async () => {
+      try {
+        const partsResponse = await fetch('/api/parts', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: dataUrl }), signal: controller.signal,
+        })
+        const partsResult = await partsResponse.json()
+        if (requestId !== analysisSequence.current) return
+        if (partsResponse.ok && Array.isArray(partsResult.parts) && partsResult.parts.length) {
+          setAiParts(partsResult.parts as SemanticPart[])
+          takeBanner(`AI đã nhận diện ${partsResult.parts.length} bộ phận (${partsResult.parts.map((part: SemanticPart) => part.name).join(', ')}) và gắn tên vào từng khối, từng nét của bài.`)
+        } else if (!partsResponse.ok && partsResult.code !== 'AI_NOT_CONFIGURED') {
+          takeBanner(`AI chưa chia được bộ phận (${partsResult.code || `HTTP ${partsResponse.status}`}): ${partsResult.error || 'không rõ lỗi'} Bài vẫn dùng nhãn local — xem log máy chủ để biết nhà cung cấp trả lỗi gì.`)
+        }
+      } catch { /* Aborted or unreachable: the lesson flow reports connectivity. */ }
+    })()
     try {
       const response = await fetch('/api/analyze', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -172,38 +195,14 @@ export default function App() {
       if (response.ok && result.lesson?.steps?.length === STAGES.length && result.lesson.steps.every((step: { shortTitle: string }, i: number) => step.shortTitle === STAGES[i].label)) {
         setLesson(result.lesson as Lesson)
         setLessonSource('ai')
-        setApiMessage('Bài hướng dẫn được AI điều chỉnh theo tỉ lệ, bố cục và ánh sáng trong ảnh này.')
+        takeBanner('Bài hướng dẫn được AI điều chỉnh theo tỉ lệ, bố cục và ánh sáng trong ảnh này.')
       } else if (result.code === 'AI_NOT_CONFIGURED') {
-        setApiMessage('Ảnh được minh họa trên máy bạn. Bài hướng dẫn chì tổng quát sẵn sàng; bật máy chủ AI để nhận phân tích riêng từ ảnh.')
+        takeBanner('Ảnh được minh họa trên máy bạn. Bài hướng dẫn chì tổng quát sẵn sàng; bật máy chủ AI để nhận phân tích riêng từ ảnh.')
       } else {
-        setApiMessage((result.error || 'Ảnh đã lên bảng. Bài hướng dẫn tổng quát vẫn sẵn sàng.') + ' Ảnh vẫn được minh họa trực tiếp trên bảng vẽ.')
-      }
-      // Semantic part names are an independent pass, NOT a bonus of the
-      // lesson: the 13-step lesson schema is strict enough that a free
-      // model can fail it while still seeing the image perfectly well.
-      // Whenever the server has AI configured, ask for the parts too —
-      // blocks and strokes then carry real names (đầu, thân, quả táo...)
-      // even when the written lesson fell back to the template.
-      if (result.code !== 'AI_NOT_CONFIGURED') {
-        try {
-          const partsResponse = await fetch('/api/parts', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: dataUrl }), signal: controller.signal,
-          })
-          const partsResult = await partsResponse.json()
-          if (requestId !== analysisSequence.current) return
-          if (partsResponse.ok && Array.isArray(partsResult.parts) && partsResult.parts.length) {
-            setAiParts(partsResult.parts as SemanticPart[])
-            setApiMessage(`AI đã nhận diện ${partsResult.parts.length} bộ phận (${partsResult.parts.map((part: SemanticPart) => part.name).join(', ')}) và gắn tên vào từng khối, từng nét của bài.`)
-          } else if (!partsResponse.ok && partsResult.code !== 'AI_NOT_CONFIGURED') {
-            // A silent fallback here once hid every provider failure behind
-            // local labels; name the failure so it can actually be fixed.
-            setApiMessage(`AI chưa chia được bộ phận (${partsResult.code || `HTTP ${partsResponse.status}`}): ${partsResult.error || 'không rõ lỗi'} Bài vẫn dùng nhãn local — xem log máy chủ để biết nhà cung cấp trả lỗi gì.`)
-          }
-        } catch { /* Part naming is optional; local labels remain. */ }
+        takeBanner((result.error || 'Ảnh đã lên bảng. Bài hướng dẫn tổng quát vẫn sẵn sàng.') + ' Ảnh vẫn được minh họa trực tiếp trên bảng vẽ.')
       }
     } catch {
-      if (requestId === analysisSequence.current && !controller.signal.aborted) setApiMessage('Chưa kết nối được máy chủ phân tích. Ảnh và bài hướng dẫn tổng quát vẫn dùng được.')
+      if (requestId === analysisSequence.current && !controller.signal.aborted) takeBanner('Chưa kết nối được máy chủ phân tích. Ảnh và bài hướng dẫn tổng quát vẫn dùng được.')
     } finally {
       if (requestId === analysisSequence.current) { setLoading(false); activeRequest.current = null }
     }
