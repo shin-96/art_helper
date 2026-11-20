@@ -346,9 +346,17 @@ export function uploadedParts(result: ProcessedImage, step: number, aiParts?: Se
       // only where the original image provided a usable line.
       const contours = result.study?.contours ?? legacy(result.contourEdges, b)
       return shapes.map((shape, index) => {
-        const edge = contours.filter(t => t.shape === index).sort((a, b) => b.length - a.length)[0]
-        const marks = edge ? [stroke(edge.path, 'Nhấn mép chính', `Nhấn lại mép rõ nhất của khối này. ${strokeInstruction('contour', edge, shape.bounds) ?? 'Đi lại một đoạn mép đã có, giữ lực nhẹ.'} Lực vừa đủ để mép rõ hơn, không đậm hơn nét chính ở bước Nét chính.`, { kind: 'ink', color: '#36362e', width: 1.45, opacity: .88 })] : compare(shape.bounds, centerOf(shape.bounds)).slice(0, 1)
-        return part(`finish-${index}`, `Hoàn thiện · ${semanticForShape(shape)?.name ?? shapeName(shape, b)}`, 'Lùi lại quan sát hình bao, nét chính và các mảng màu. Chỉ nhấn một mép rõ đã có trong ảnh.', shape.bounds, marks,
+        // Finishing re-asserts the part's whole outer silhouette, segment by
+        // segment — a single longest edge left the final drawing reading as
+        // the raw block-in polygon instead of the subject.
+        const silhouette = sampleEvenly(contours.filter(t => t.shape === index && t.exterior), 10)
+        const marks = silhouette.length
+          ? silhouette.map((edge, edgeIndex) => stroke(edge.path, `Nhấn đường bao ${edgeIndex + 1}`, `${strokeInstruction('contour', edge, shape.bounds) ?? 'Đi lại đoạn đường bao đã có, giữ lực nhẹ.'} Lực vừa đủ để mép rõ hơn, không đậm hơn nét chính ở bước Nét chính.`, { kind: 'ink', color: '#36362e', width: 1.45, opacity: .88 }))
+          : (() => {
+              const edge = contours.filter(t => t.shape === index).sort((a, b) => b.length - a.length)[0]
+              return edge ? [stroke(edge.path, 'Nhấn mép chính', `Nhấn lại mép rõ nhất của khối này. ${strokeInstruction('contour', edge, shape.bounds) ?? 'Đi lại một đoạn mép đã có, giữ lực nhẹ.'} Lực vừa đủ để mép rõ hơn, không đậm hơn nét chính ở bước Nét chính.`, { kind: 'ink', color: '#36362e', width: 1.45, opacity: .88 })] : compare(shape.bounds, centerOf(shape.bounds)).slice(0, 1)
+            })()
+        return part(`finish-${index}`, `Hoàn thiện · ${semanticForShape(shape)?.name ?? shapeName(shape, b)}`, 'Lùi lại quan sát hình bao, nét chính và các mảng màu. Nhấn lại toàn bộ đường bao ngoài của phần này, từng đoạn một, để hình cuối đọc ra đúng chủ thể.', shape.bounds, marks,
           'Khối lớn vẫn đọc được từ xa; nét chi tiết không tranh với nét chính.', 'Dừng khi dáng chính và mảng sáng tối đã rõ.')
       })
     }

@@ -13,6 +13,9 @@ export interface ImageTrace {
    *  an instruction that names where this exact stroke starts and ends. */
   start?: ImagePoint;
   end?: ImagePoint;
+  /** True for traces that run along the subject's outer silhouette, as
+   *  opposed to interior lines. The finishing step re-asserts these. */
+  exterior?: boolean;
 }
 export interface ImageShape {
   bounds: ImageBounds;
@@ -362,7 +365,7 @@ function shapeFrom(cells: number[], width: number, toBoard: (x: number, y: numbe
     for (const i of cells) cellMask[i] = 1;
     const chains = traceSilhouette(cellMask, width, heightGuess);
     if (chains.length) {
-      const simplified = simplify(chains[0], Math.max(1.5, Math.min(extentU, extentV) * .045));
+      const simplified = simplify(chains[0], Math.max(1.2, Math.min(extentU, extentV) * .02));
       if (simplified.length >= 5) silhouette = simplified;
     }
     if (silhouette.length > 1 && silhouette[0].x === silhouette[silhouette.length - 1].x && silhouette[0].y === silhouette[silhouette.length - 1].y) silhouette = silhouette.slice(0, -1);
@@ -504,7 +507,7 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
   const contourPaint = { color: '#3e4039', width: 2.35, opacity: .88 };
   const boundary = exterior.slice(0, 7).flatMap(chain => {
     const boardPoints = smooth(simplify(chain, 1.65).map(({ x, y }) => toBoard(x, y)), 1);
-    return splitAtCorners(boardPoints, 34, 135).map(section => trace(section, contourPaint));
+    return splitAtCorners(boardPoints, 34, 135).map(section => ({ ...trace(section, contourPaint), exterior: true }));
   }).slice(0, 68);
   const interior = traceInterior(r, g, b, mask, width, height);
   const major = interior.filter(chain => chain.points.length >= 10).slice(0, 40);
@@ -578,6 +581,7 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
     const points = [start, end]
     return { ...item, path: pathFrom(points), bounds: pointBounds(points), start, end }
   });
+  colors = followForm(colors);
   const tones = followForm(cap(brushRows(Math.max(5, Math.ceil(spacing * 1.13)), 0, 'tone'), 72));
   const shadows = followForm(cap(brushRows(Math.max(5, Math.ceil(spacing * 1.1)), 0, 'shadow'), 62));
   return {

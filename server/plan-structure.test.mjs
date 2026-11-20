@@ -48,6 +48,37 @@ test('có AI thì các khối gộp thành một bộ phận duy nhất và đi 
   assert.equal(parts[0].strokes.length, 12)
 })
 
+test('bước hoàn thiện nhấn lại toàn bộ đường bao ngoài của khối, không chỉ một mép dài nhất', () => {
+  const result = fakeResult()
+  const exterior = [makeTrace(200, 160, 0), makeTrace(300, 250, 0), makeTrace(200, 330, 0)]
+  exterior.forEach(trace => { trace.exterior = true })
+  const interiorLong = makeTrace(220, 250, 0)
+  interiorLong.length = 999
+  result.study.contours = [...exterior, interiorLong]
+  const parts = uploadedParts(result, 12)
+  const first = parts.find(part => part.id === 'finish-0')
+  assert.ok(first)
+  assert.equal(first.strokes.length, 3, `phải nhấn đủ 3 đoạn bao ngoài, nhận ${first.strokes.length}`)
+  assert.ok(first.strokes.every((strokeItem, i) => strokeItem.path === exterior[i].path), 'chỉ nhấn nét bao ngoài, không lấy nét trong dài nhất')
+})
+
+test('đường bao khối giữ được phần mảnh như chân thay vì bị đơn giản hóa nuốt mất', () => {
+  const w = 200, h = 200
+  const pixels = new Uint8ClampedArray(w * h * 4).fill(255)
+  const fill = (x0, y0, x1, y1) => {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4
+      pixels[i] = 50; pixels[i + 1] = 48; pixels[i + 2] = 45
+    }
+  }
+  fill(60, 40, 150, 120)   // thân
+  fill(70, 120, 78, 180)   // chân mảnh rộng 8px
+  const result = analyzeImagePixels(pixels, w, h)
+  const legTipBoardY = result.imageBounds.y + (180 / h) * result.imageBounds.height
+  const deepest = Math.max(...result.study.shapes.map(shape => shape.bounds.y + shape.bounds.height))
+  assert.ok(deepest >= legTipBoardY - 14, `bao khối phải chạm gần đầu chân (sâu nhất ${deepest.toFixed(1)}, đầu chân ${legTipBoardY.toFixed(1)})`)
+})
+
 test('nét sắc độ chạy theo trục dài của khối thay vì quét ngang toàn ảnh', () => {
   const w = 220, h = 220
   const pixels = new Uint8ClampedArray(w * h * 4).fill(255)
