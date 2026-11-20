@@ -173,9 +173,18 @@ export default function App() {
         setLesson(result.lesson as Lesson)
         setLessonSource('ai')
         setApiMessage('Bài hướng dẫn được AI điều chỉnh theo tỉ lệ, bố cục và ánh sáng trong ảnh này.')
-        // Semantic part names are an optional second pass: when the server
-        // can see the image, blocks and strokes get real part names (đầu,
-        // thân, quả táo...). Any failure here leaves the local labels as-is.
+      } else if (result.code === 'AI_NOT_CONFIGURED') {
+        setApiMessage('Ảnh được minh họa trên máy bạn. Bài hướng dẫn chì tổng quát sẵn sàng; bật máy chủ AI để nhận phân tích riêng từ ảnh.')
+      } else {
+        setApiMessage((result.error || 'Ảnh đã lên bảng. Bài hướng dẫn tổng quát vẫn sẵn sàng.') + ' Ảnh vẫn được minh họa trực tiếp trên bảng vẽ.')
+      }
+      // Semantic part names are an independent pass, NOT a bonus of the
+      // lesson: the 13-step lesson schema is strict enough that a free
+      // model can fail it while still seeing the image perfectly well.
+      // Whenever the server has AI configured, ask for the parts too —
+      // blocks and strokes then carry real names (đầu, thân, quả táo...)
+      // even when the written lesson fell back to the template.
+      if (result.code !== 'AI_NOT_CONFIGURED') {
         try {
           const partsResponse = await fetch('/api/parts', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -188,10 +197,6 @@ export default function App() {
             setApiMessage(`AI đã nhận diện ${partsResult.parts.length} bộ phận (${partsResult.parts.map((part: SemanticPart) => part.name).join(', ')}) và gắn tên vào từng khối, từng nét của bài.`)
           }
         } catch { /* Part naming is optional; local labels remain. */ }
-      } else if (result.code === 'AI_NOT_CONFIGURED') {
-        setApiMessage('Ảnh được minh họa trên máy bạn. Bài hướng dẫn chì tổng quát sẵn sàng; bật máy chủ AI để nhận phân tích riêng từ ảnh.')
-      } else {
-        setApiMessage((result.error || 'Ảnh đã lên bảng. Bài hướng dẫn tổng quát vẫn sẵn sàng.') + ' Ảnh vẫn được minh họa trực tiếp trên bảng vẽ.')
       }
     } catch {
       if (requestId === analysisSequence.current && !controller.signal.aborted) setApiMessage('Chưa kết nối được máy chủ phân tích. Ảnh và bài hướng dẫn tổng quát vẫn dùng được.')
