@@ -21,6 +21,105 @@ const direction = (p: ImagePoint, b: ImageBounds) => {
   const vertical = y < .38 ? 'phía trên' : y > .62 ? 'phía dưới' : ''
   return [vertical, horizontal].filter(Boolean).join(' ') || 'ở giữa'
 }
+/** Start/end of a trace: prefer the geometry recorded during analysis and
+ *  fall back to parsing the path so older plans still get real instructions. */
+function traceEnds(trace: ImageTrace): { start: ImagePoint; end: ImagePoint } | null {
+  if (trace.start && trace.end) return { start: trace.start, end: trace.end }
+  const values = trace.path.match(/-?\d+\.?\d*/g)?.map(Number) ?? []
+  if (values.length < 4) return null
+  return { start: point(values[0], values[1]), end: point(values[values.length - 2], values[values.length - 1]) }
+}
+
+function compassWord(from: ImagePoint, to: ImagePoint): string {
+  const dx = to.x - from.x, dy = to.y - from.y
+  if (Math.hypot(dx, dy) < 6) return 'một vòng gần như khép kín'
+  const angle = Math.atan2(dy, dx) * 180 / Math.PI
+  if (angle <= -157.5 || angle > 157.5) return 'sang trái'
+  if (angle > 112.5) return 'chéo xuống trái'
+  if (angle > 67.5) return 'xuống dưới'
+  if (angle > 22.5) return 'chéo xuống phải'
+  if (angle > -22.5) return 'sang phải'
+  if (angle > -67.5) return 'chéo lên phải'
+  if (angle > -112.5) return 'lên trên'
+  return 'chéo lên trái'
+}
+
+function curvatureWord(trace: ImageTrace, start: ImagePoint, end: ImagePoint): string {
+  const straight = Math.hypot(end.x - start.x, end.y - start.y)
+  if (straight < 5 && trace.length > 20) return 'cong vòng, gần như khép kín'
+  const ratio = trace.length / Math.max(1, straight)
+  if (ratio < 1.06) return 'gần như thẳng'
+  if (ratio < 1.3) return 'cong nhẹ'
+  if (ratio < 1.7) return 'cong rõ'
+  return 'gấp khúc nhiều lần'
+}
+
+function lengthWord(length: number): string {
+  if (length < 30) return 'Đây là nét ngắn'
+  if (length < 85) return 'Đây là nét vừa'
+  return 'Đây là nét dài — có thể thở ra chậm trong lúc kéo'
+}
+
+/** A rough Vietnamese colour name for a sampled hex, so colour instructions
+ *  can say the colour instead of only showing a code. */
+export function colorName(hexValue?: string): string {
+  const match = /^#?([0-9a-f]{6})$/i.exec(hexValue ?? '')
+  if (!match) return 'màu mẫu'
+  const n = parseInt(match[1], 16)
+  const r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), lum = (r + g + b) / 3
+  if (max - min < 18 || (max - min) / Math.max(1, max) < .13) return lum > 205 ? 'trắng ngà' : lum > 145 ? 'xám nhạt' : lum > 75 ? 'xám' : lum > 32 ? 'xám đậm' : 'đen'
+  let hue = Math.atan2(Math.sqrt(3) * (g - b), 2 * r - g - b) * 180 / Math.PI
+  if (hue < 0) hue += 360
+  if (hue >= 15 && hue < 45 && lum < 115) return 'nâu'
+  if (hue < 15 || hue >= 345) return 'đỏ'
+  if (hue < 45) return 'cam'
+  if (hue < 70) return 'vàng'
+  if (hue < 160) return 'xanh lá'
+  if (hue < 200) return 'xanh lơ'
+  if (hue < 255) return 'xanh dương'
+  if (hue < 290) return 'tím'
+  return 'hồng'
+}
+
+/** One instruction per stroke, built from that stroke's own geometry:
+ *  where it starts, which way it travels, how it curves and where it ends. */
+export function strokeInstruction(layer: string, trace: ImageTrace, partBounds: ImageBounds): string | null {
+  const ends = traceEnds(trace)
+  if (!ends) return null
+  const { start, end } = ends
+  const from = direction(start, partBounds), to = direction(end, partBounds)
+  if (trace.length < 8) {
+    // A dab, not a travelling stroke: say where it lands and, for colour, what it is.
+    if (layer === 'color') return `Chấm một dải ${colorName(trace.color)}${trace.color ? ` (${trace.color})` : ''} ngắn ở ${from} của phần này, giữ nguyên mảng sáng bên cạnh.`
+    if (layer === 'tone' || layer === 'shadow') return `Chấm một vệt chì ngắn ở ${from} của phần này, lực nhẹ và đều.`
+    return null
+  }
+  const way = compassWord(start, end), curve = curvatureWord(trace, start, end)
+  if (from === to) {
+    const place = `ở vùng ${from} của phần này`
+    switch (layer) {
+      case 'tone': return `Phủ một lớp chì nhẹ ${place}: kéo ${way} theo đường ${curve}, giữ lực đều và nhạt rồi nhấc bút.`
+      case 'shadow': return `Tăng đậm ${place}: kéo ${way} theo đường ${curve}, dừng trước rìa chuyển sáng.`
+      case 'color': return `Tô ${colorName(trace.color)}${trace.color ? ` (${trace.color})` : ''} ${place}: kéo ${way} theo đường ${curve} rồi nhấc cọ.`
+      case 'detail': return `Đặt đầu bút thật nhẹ ${place}, đi ${way} theo đường ${curve}. ${lengthWord(trace.length)} — giảm lực ở cuối nét.`
+      default: return `Đặt bút ${place}, kéo ${way} theo đường ${curve}. ${lengthWord(trace.length)} — đi liền một hơi và chỉ nhấc bút ở điểm cuối.`
+    }
+  }
+  switch (layer) {
+    case 'tone':
+      return `Phủ một lớp chì nhẹ: đặt bút ở ${from} của phần này, kéo ${way} theo đường ${curve} tới ${to}. Giữ lực đều và nhạt, nhấc bút ngay khi tới điểm cuối.`
+    case 'shadow':
+      return `Tăng đậm trong vùng tối: từ ${from} kéo ${way} theo đường ${curve} tới ${to}. Dừng trước rìa chuyển sáng, đừng vạch viền cứng quanh bóng.`
+    case 'color':
+      return `Tô ${colorName(trace.color)}${trace.color ? ` (${trace.color})` : ''}: kéo một dải liền từ ${from} ${way} tới ${to}, rồi nhấc cọ. Chừa lại mảng sáng đã dựng ở các bước trước.`
+    case 'detail':
+      return `Đặt đầu bút thật nhẹ ở ${from} của phần này, đi ${way} theo đường ${curve} tới ${to}. ${lengthWord(trace.length)} — giảm lực ở cuối nét rồi nhấc bút.`
+    default:
+      return `Đặt bút ở ${from} của phần này, kéo ${way} theo đường ${curve} tới ${to}. ${lengthWord(trace.length)} — đi liền một hơi và chỉ nhấc bút ở điểm cuối.`
+  }
+}
+
 const construction = { kind: 'construction', color: '#ad6f53', width: 1.65, opacity: .67 } as const
 const checkpointStyle = { kind: 'check', color: '#3e7466', width: 2.4, opacity: .94 } as const
 const stroke = (path: string, label: string, instruction: string, style: Partial<GuidedStroke> = construction): GuidedStroke => ({ ...style, path, label, instruction })
@@ -53,9 +152,10 @@ function frameParts(b: ImageBounds) {
   ], 'Chiều cao và chiều ngang có cùng tương quan như ảnh.', 'So lại bốn mép trước khi dựng khối; chưa kẻ theo chi tiết.')]
 }
 
-function blockParts(shapes: ImageShape[], bounds: ImageBounds) {
+function blockParts(shapes: ImageShape[], bounds: ImageBounds, approximate = false) {
   return shapes.map((shape, index) => part(`block-${index}`, shapeName(shape, bounds),
-    index === 0 ? 'Khối có diện tích lớn nhất được dựng trước. Hình này đơn giản hóa bề mặt, không xác định tên bộ phận.' : 'Khối nhỏ hơn được đặt theo chỗ nối và khoảng trống quan sát được.',
+    (index === 0 ? 'Khối có diện tích lớn nhất được dựng trước. Hình này đơn giản hóa bề mặt, không xác định tên bộ phận.' : 'Khối nhỏ hơn được đặt theo chỗ nối và khoảng trống quan sát được.')
+      + (approximate ? ' Lưu ý: nền và chủ thể gần màu nhau nên khối này là mốc ước lượng — hãy đối chiếu với ảnh gốc mờ ở bước Quan sát trước khi theo nét.' : ''),
     shape.bounds, [stroke(shape.path, 'Phác hình khối', 'Đi một vòng nhẹ theo hình bao giản lược, dừng ở từng đoạn đổi hướng.')],
     'Khối đã chiếm đúng vùng tương đối; mép tạm chưa phải đường viền cuối.', 'So lại với khối liền kề trước khi thêm trục hoặc mặt cắt.'))
 }
@@ -108,7 +208,7 @@ function legacy(pathText: string | undefined, bounds: ImageBounds): ImageTrace[]
     if (points.length < 2) return []
     const x = Math.min(...points.map(p => p.x)), y = Math.min(...points.map(p => p.y))
     const center = points[Math.floor(points.length / 2)]
-    return [{ path, center, shape: +(center.y > bounds.y + bounds.height * .5), bounds: { x, y, width: Math.max(1, Math.max(...points.map(p => p.x)) - x), height: Math.max(1, Math.max(...points.map(p => p.y)) - y) }, length: Math.hypot(points[0].x - points.at(-1)!.x, points[0].y - points.at(-1)!.y) }]
+    return [{ path, center, start: points[0], end: points.at(-1), shape: +(center.y > bounds.y + bounds.height * .5), bounds: { x, y, width: Math.max(1, Math.max(...points.map(p => p.x)) - x), height: Math.max(1, Math.max(...points.map(p => p.y)) - y) }, length: points.slice(1).reduce((sum, p, i) => sum + Math.hypot(p.x - points[i].x, p.y - points[i].y), 0) }]
   })
 }
 
@@ -135,7 +235,7 @@ function tracedParts(result: ProcessedImage, layer: TraceLayer, traces: ImageTra
     const bounds = boundsOf(list)
     const ordered = layer === 'contour' ? list : [...list].sort((a, b) => a.center.y - b.center.y || a.center.x - b.center.x)
     return part(`${layer}-${shape}`, `${text.label} ${direction(centerOf(bounds), result.bounds)}`, text.shape, bounds,
-      ordered.map((trace, index) => stroke(trace.path, `${text.stroke} ${index + 1}`, text.instruction, { kind: text.kind, color: trace.color, width: trace.width, opacity: trace.opacity })),
+      ordered.map((trace, index) => stroke(trace.path, `${text.stroke} ${index + 1}`, strokeInstruction(layer, trace, bounds) ?? text.instruction, { kind: text.kind, color: trace.color, width: trace.width, opacity: trace.opacity })),
       text.checkpoint, text.correction)
   })
 }
@@ -144,6 +244,7 @@ function tracedParts(result: ProcessedImage, layer: TraceLayer, traces: ImageTra
 export function uploadedParts(result: ProcessedImage, step: number): GuidedPart[] {
   const b = result.bounds
   const shapes = dimensions(result)
+  const approximate = result.study?.confidence === 'approximate'
   const geometryNote = result.study?.confidence === 'clear'
     ? 'Đọc hình bao và khoảng trống xung quanh trước khi dựng.'
     : 'Nền và chủ thể có vùng màu gần nhau. Các mốc là ước lượng theo ảnh, không phải nhận diện tên bộ phận.'
@@ -153,7 +254,7 @@ export function uploadedParts(result: ProcessedImage, step: number): GuidedPart[
     case 1:
       return frameParts(b)
     case 2:
-      return blockParts(shapes, b)
+      return blockParts(shapes, b, approximate)
     case 3:
       return proportionsParts(shapes, b)
     case 4:
@@ -185,7 +286,7 @@ export function uploadedParts(result: ProcessedImage, step: number): GuidedPart[
       const contours = result.study?.contours ?? legacy(result.contourEdges, b)
       return shapes.map((shape, index) => {
         const edge = contours.filter(t => t.shape === index).sort((a, b) => b.length - a.length)[0]
-        const marks = edge ? [stroke(edge.path, 'Nhấn mép chính', 'Đi lại một đoạn mép đã có, giữ lực nhẹ để màu và chì vẫn cân bằng.', { kind: 'ink', color: '#36362e', width: 1.45, opacity: .88 })] : compare(shape.bounds, centerOf(shape.bounds)).slice(0, 1)
+        const marks = edge ? [stroke(edge.path, 'Nhấn mép chính', `Nhấn lại mép rõ nhất của khối này. ${strokeInstruction('contour', edge, shape.bounds) ?? 'Đi lại một đoạn mép đã có, giữ lực nhẹ.'} Lực vừa đủ để mép rõ hơn, không đậm hơn nét chính ở bước Nét chính.`, { kind: 'ink', color: '#36362e', width: 1.45, opacity: .88 })] : compare(shape.bounds, centerOf(shape.bounds)).slice(0, 1)
         return part(`finish-${index}`, `Hoàn thiện · ${shapeName(shape, b)}`, 'Lùi lại quan sát hình bao, nét chính và các mảng màu. Chỉ nhấn một mép rõ đã có trong ảnh.', shape.bounds, marks,
           'Khối lớn vẫn đọc được từ xa; nét chi tiết không tranh với nét chính.', 'Dừng khi dáng chính và mảng sáng tối đã rõ.')
       })

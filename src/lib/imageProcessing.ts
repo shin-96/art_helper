@@ -9,6 +9,10 @@ export interface ImageTrace {
   color?: string;
   width?: number;
   opacity?: number;
+  /** First and last point of the stroke, in board coordinates. Used to write
+   *  an instruction that names where this exact stroke starts and ends. */
+  start?: ImagePoint;
+  end?: ImagePoint;
 }
 export interface ImageShape {
   bounds: ImageBounds;
@@ -134,6 +138,52 @@ function simplify(points: ImagePoint[], tolerance: number): ImagePoint[] {
     if (distance > maximum) { maximum = distance; split = i; }
   }
   return split === -1 ? [a, b] : [...simplify(points.slice(0, split + 1), tolerance).slice(0, -1), ...simplify(points.slice(split), tolerance)];
+}
+
+/** Chaikin corner cutting: removes pixel stair-steps from a traced line
+ *  while keeping both endpoints exactly where they were. */
+function smooth(points: ImagePoint[], iterations = 1): ImagePoint[] {
+  let out = points;
+  for (let n = 0; n < iterations; n++) {
+    if (out.length < 3) break;
+    const next: ImagePoint[] = [out[0]];
+    for (let i = 0; i + 1 < out.length; i++) {
+      const a = out[i], b = out[i + 1];
+      next.push({ x: a.x * .75 + b.x * .25, y: a.y * .75 + b.y * .25 });
+      next.push({ x: a.x * .25 + b.x * .75, y: a.y * .25 + b.y * .75 });
+    }
+    next.push(out[out.length - 1]);
+    out = next;
+  }
+  return out;
+}
+
+/** Split a line where it naturally turns (a corner a teacher would lift the
+ *  pen at), instead of every fixed number of units. Lengths are board units. */
+function splitAtCorners(points: ImagePoint[], minLength: number, maxLength: number, turnDegrees = 38): ImagePoint[][] {
+  if (points.length < 3) return [points];
+  const sections: ImagePoint[][] = [];
+  let current = [points[0]], length = 0;
+  for (let i = 1; i < points.length; i++) {
+    length += distance(points[i - 1], points[i]);
+    current.push(points[i]);
+    let split = length >= maxLength;
+    if (!split && length >= minLength && i > 1 && i + 1 < points.length) {
+      const a = points[i - 1], b = points[i], c = points[i + 1];
+      const v1x = b.x - a.x, v1y = b.y - a.y, v2x = c.x - b.x, v2y = c.y - b.y;
+      const m1 = Math.hypot(v1x, v1y), m2 = Math.hypot(v2x, v2y);
+      if (m1 && m2) {
+        const angle = Math.acos(clamp((v1x * v2x + v1y * v2y) / (m1 * m2), -1, 1)) * 180 / Math.PI;
+        split = angle >= turnDegrees;
+      }
+    }
+    if (split && i + 1 < points.length) { sections.push(current); current = [points[i]]; length = 0; }
+  }
+  if (current.length > 1) {
+    if (sections.length && length < minLength * .45) sections[sections.length - 1].push(...current.slice(1));
+    else sections.push(current);
+  }
+  return sections.filter(section => section.length > 1);
 }
 
 function pointBounds(points: ImagePoint[]): ImageBounds {
@@ -300,7 +350,23 @@ function shapeFrom(cells: number[], width: number, toBoard: (x: number, y: numbe
   } else {
     const reduced = simplify([...hull, hull[0]], Math.max(2, Math.min(extentU, extentV) * .12)).slice(0, -1);
     family = reduced.length <= 4 && occupancy < .62 ? 'wedge' : 'mass';
-    outline = (reduced.length >= 3 ? reduced : hull).map(({ x, y }) => toBoard(x, y));
+    // Prefer the group's real silhouette, simplified lightly, over its convex
+    // hull: a hull invents straight edges the subject does not have (a diamond
+    // laid over a dog), and a learner copying them learns angles that are not
+    // in the reference. Fall back to the hull only if no usable chain exists.
+    let silhouette: ImagePoint[] = [];
+    let maxCell = 0;
+    for (const i of cells) if (i > maxCell) maxCell = i;
+    const heightGuess = Math.floor(maxCell / width) + 1;
+    const cellMask = new Uint8Array(width * heightGuess);
+    for (const i of cells) cellMask[i] = 1;
+    const chains = traceSilhouette(cellMask, width, heightGuess);
+    if (chains.length) {
+      const simplified = simplify(chains[0], Math.max(1.5, Math.min(extentU, extentV) * .045));
+      if (simplified.length >= 5) silhouette = simplified;
+    }
+    if (silhouette.length > 1 && silhouette[0].x === silhouette[silhouette.length - 1].x && silhouette[0].y === silhouette[silhouette.length - 1].y) silhouette = silhouette.slice(0, -1);
+    outline = (silhouette.length >= 3 ? silhouette : (reduced.length >= 3 ? reduced : hull)).map(({ x, y }) => toBoard(x, y));
   }
   if (outline.length < 3) outline = [toAxis(minU, minV), toAxis(maxU, minV), toAxis(maxU, maxV), toAxis(minU, maxV)];
   return {
@@ -432,26 +498,18 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
   const trace = (points: ImagePoint[], style: Pick<ImageTrace, 'color' | 'opacity' | 'width'> = {}): ImageTrace => {
     const bounds = pointBounds(points);
     const center = points[Math.floor(points.length / 2)];
-    return { path: pathFrom(points), bounds, center, shape: shapeAt(center), length: points.slice(1).reduce((n, point, i) => n + distance(points[i], point), 0), ...style };
+    return { path: pathFrom(points), bounds, center, shape: shapeAt(center), length: points.slice(1).reduce((n, point, i) => n + distance(points[i], point), 0), start: points[0], end: points[points.length - 1], ...style };
   };
   const exterior = hasSilhouette ? traceSilhouette(mask, width, height) : [];
   const contourPaint = { color: '#3e4039', width: 2.35, opacity: .88 };
   const boundary = exterior.slice(0, 7).flatMap(chain => {
-    const simplified = simplify(chain, 1.65);
-    const sections: ImageTrace[] = [];
-    let current = [simplified[0]], length = 0;
-    for (const point of simplified.slice(1)) {
-      length += distance(current[current.length - 1], point) * fit;
-      current.push(point);
-      if (length > 74) { sections.push(trace(current.map(({x, y}) => toBoard(x, y)), contourPaint)); current = [point]; length = 0; }
-    }
-    if (current.length > 1 && length > 7) sections.push(trace(current.map(({x, y}) => toBoard(x, y)), contourPaint));
-    return sections;
+    const boardPoints = smooth(simplify(chain, 1.65).map(({ x, y }) => toBoard(x, y)), 1);
+    return splitAtCorners(boardPoints, 34, 135).map(section => trace(section, contourPaint));
   }).slice(0, 68);
   const interior = traceInterior(r, g, b, mask, width, height);
   const major = interior.filter(chain => chain.points.length >= 10).slice(0, 40);
-  const contours = [...boundary, ...major.map(({points}) => trace(simplify(points, 1.25).map(({x,y}) => toBoard(x,y)), { color: '#3e4039', width: 1.7, opacity: .78 }))];
-  const details = interior.filter(item => !major.includes(item)).slice(0, 54).map(({points}) => trace(simplify(points, .85).map(({x,y}) => toBoard(x,y)), { color: '#49463d', width: .95, opacity: .69 }));
+  const contours = [...boundary, ...major.map(({points}) => trace(smooth(simplify(points, 1.25).map(({x,y}) => toBoard(x,y)), 1), { color: '#3e4039', width: 1.7, opacity: .78 }))];
+  const details = interior.filter(item => !major.includes(item)).slice(0, 54).map(({points}) => trace(smooth(simplify(points, .85).map(({x,y}) => toBoard(x,y)), 1), { color: '#49463d', width: .95, opacity: .69 }));
 
   const luma = mass.map(i => luminance(sampleOf(r,g,b,i))).sort((a,b) => a-b);
   const low = luma[Math.floor(luma.length * .2)] ?? 60;
@@ -512,7 +570,7 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
 
 export async function processImage(src: string): Promise<ProcessedImage> {
   const image = await loadCanvasImage(src);
-  const scale = Math.min(1, 296 / Math.max(image.naturalWidth, image.naturalHeight));
+  const scale = Math.min(1, 512 / Math.max(image.naturalWidth, image.naturalHeight));
   const width = Math.max(8, Math.round(image.naturalWidth * scale));
   const height = Math.max(8, Math.round(image.naturalHeight * scale));
   const canvas = document.createElement('canvas');
