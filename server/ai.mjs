@@ -129,8 +129,8 @@ export async function callAiJson({ config, ...rest }) {
       return parsed
     } catch (error) {
       lastError = error
-      if (error?.upstreamStatus !== 404) throw error
-      console.error(`[ai] provider=${config.provider} model=${model} returned 404; trying the next model`)
+      if (![404, 429, 503].includes(error?.upstreamStatus)) throw error
+      console.error(`[ai] provider=${config.provider} model=${model} returned ${error.upstreamStatus}; trying the next model`)
       if (index === candidates.length - 1 && config.provider === 'gemini' && !discovered) {
         discovered = true
         const found = await discoverModels(config, cacheKey)
@@ -192,8 +192,10 @@ async function callOnce({ config, model, prompt, image, schema, schemaName, maxO
   if (result.status !== 200 || !result.payload) {
     console.error(`[ai] provider=${config.provider} model=${model} upstream status=${result.status}`)
   }
-  if (result.status === 429) {
-    throw new LessonError(503, 'AI_UNAVAILABLE', 'AI đang bận hoặc đã hết lượt miễn phí. Vui lòng thử lại sau.')
+  if (result.status === 429 || result.status === 503) {
+    const error = new LessonError(503, 'AI_UNAVAILABLE', 'AI đang bận, quá tải hoặc đã hết lượt miễn phí. Vui lòng thử lại sau.')
+    error.upstreamStatus = result.status
+    throw error
   }
   if (result.status !== 200 || !result.payload) {
     const error = new LessonError(502, 'AI_UPSTREAM_ERROR', 'Dịch vụ AI gặp lỗi. Vui lòng thử lại.')

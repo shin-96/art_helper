@@ -125,3 +125,24 @@ test('callAiJson tự phát hiện model qua /models khi cả chuỗi tĩnh đ�
   assert.deepEqual(await ask(), { ok: true })
   assert.deepEqual(seen, ['gone', 'gemini-9-flash'])
 })
+
+test('callAiJson lùi model khi model đầu quá tải (503) và báo AI_UNAVAILABLE khi mọi model đều bận', async (t) => {
+  const seen = []
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const model = JSON.parse(init.body).model
+    seen.push(model)
+    if (model === 'busy') return new Response('overloaded', { status: 503 })
+    return Response.json({ choices: [{ message: { content: '{"ok":true}' } }] })
+  })
+  const config = { provider: 'gemini', token: 'k', baseUrl: 'https://load.example.invalid/v1', model: 'busy', models: ['busy', 'free'] }
+  const ask = () => callAiJson({ config, prompt: 'p', image: 'data:image/png;base64,x', schema: { type: 'object' }, schemaName: 't', refusedMessage: 'r', timeoutMessage: 't' })
+  assert.deepEqual(await ask(), { ok: true })
+  assert.deepEqual(seen, ['busy', 'free'])
+
+  t.mock.method(globalThis, 'fetch', async () => new Response('overloaded', { status: 503 }))
+  const single = { provider: 'gemini', token: 'k', baseUrl: 'https://load2.example.invalid/v1', model: 'busy' }
+  await assert.rejects(
+    () => callAiJson({ config: single, prompt: 'p', image: 'data:image/png;base64,x', schema: { type: 'object' }, schemaName: 't', refusedMessage: 'r', timeoutMessage: 't' }),
+    error => error instanceof LessonError && error.code === 'AI_UNAVAILABLE',
+  )
+})
