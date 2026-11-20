@@ -575,7 +575,7 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
           // Tone passes run the full width of the region: fur noise must not
           // chop a shading stroke into dashes. Colour and shadow strokes
           // still break where the sampled colour actually changes.
-          else if (x - start >= maxLength || (variant !== 'tone' && x - start >= Math.max(5, spacing * .8) && colorGap(sampleOf(r,g,b,i), sampleOf(r,g,b,y * width + start)) > (variant === 'color' ? 26 : 34))) { paint(start, x); start = x; }
+          else if (x - start >= maxLength || (variant !== 'tone' && x - start >= Math.max(5, spacing * .8) && colorGap(sampleOf(r,g,b,i), sampleOf(r,g,b,y * width + start)) > (variant === 'color' ? 46 : 34))) { paint(start, x); start = x; }
         } else if (start >= 0) { paint(start, x); start = -1; }
       }
     }

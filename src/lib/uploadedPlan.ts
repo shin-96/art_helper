@@ -415,8 +415,14 @@ export function uploadedParts(result: ProcessedImage, step: number, aiParts?: Se
         // segment — a single longest edge left the final drawing reading as
         // the raw block-in polygon instead of the subject.
         const silhouette = sampleEvenly(contours.filter(t => t.shape === index && t.exterior), 10)
+        // The features that make a part recognisable (an eye line, a muzzle,
+        // the mouth holding something) are interior lines, not silhouette.
+        // Re-assert the few longest ones too, or the finished drawing keeps
+        // a correct outline around an empty face.
+        const features = contours.filter(t => t.shape === index && !t.exterior).sort((a, b) => b.length - a.length).slice(0, 3)
+        const featureMarks = features.map((edge, edgeIndex) => stroke(edge.path, `Nhấn nét mặt ${edgeIndex + 1}`, `${strokeInstruction('contour', edge, shape.bounds) ?? 'Đi lại nét đặc trưng đã có, giữ lực nhẹ.'} Đây là nét làm nên đặc điểm của phần này — nhấn rõ để hình cuối đọc ra được nó.`, { kind: 'ink', color: '#36362e', width: 1.3, opacity: .85 }))
         const marks = silhouette.length
-          ? silhouette.map((edge, edgeIndex) => stroke(edge.path, `Nhấn đường bao ${edgeIndex + 1}`, `${strokeInstruction('contour', edge, shape.bounds) ?? 'Đi lại đoạn đường bao đã có, giữ lực nhẹ.'} Lực vừa đủ để mép rõ hơn, không đậm hơn nét chính ở bước Nét chính.`, { kind: 'ink', color: '#36362e', width: 1.45, opacity: .88 }))
+          ? [...silhouette.map((edge, edgeIndex) => stroke(edge.path, `Nhấn đường bao ${edgeIndex + 1}`, `${strokeInstruction('contour', edge, shape.bounds) ?? 'Đi lại đoạn đường bao đã có, giữ lực nhẹ.'} Lực vừa đủ để mép rõ hơn, không đậm hơn nét chính ở bước Nét chính.`, { kind: 'ink', color: '#36362e', width: 1.45, opacity: .88 })), ...featureMarks]
           : (() => {
               const edge = contours.filter(t => t.shape === index).sort((a, b) => b.length - a.length)[0]
               return edge ? [stroke(edge.path, 'Nhấn mép chính', `Nhấn lại mép rõ nhất của khối này. ${strokeInstruction('contour', edge, shape.bounds) ?? 'Đi lại một đoạn mép đã có, giữ lực nhẹ.'} Lực vừa đủ để mép rõ hơn, không đậm hơn nét chính ở bước Nét chính.`, { kind: 'ink', color: '#36362e', width: 1.45, opacity: .88 })] : compare(shape.bounds, centerOf(shape.bounds)).slice(0, 1)

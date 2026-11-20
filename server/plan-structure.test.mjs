@@ -114,8 +114,9 @@ test('bước hoàn thiện nhấn lại toàn bộ đường bao ngoài của k
   const parts = uploadedParts(result, 12)
   const first = parts.find(part => part.id === 'finish-0')
   assert.ok(first)
-  assert.equal(first.strokes.length, 3, `phải nhấn đủ 3 đoạn bao ngoài, nhận ${first.strokes.length}`)
-  assert.ok(first.strokes.every((strokeItem, i) => strokeItem.path === exterior[i].path), 'chỉ nhấn nét bao ngoài, không lấy nét trong dài nhất')
+  assert.ok(first.strokes.length >= 3, `phải nhấn đủ 3 đoạn bao ngoài, nhận ${first.strokes.length}`)
+  assert.ok(first.strokes.slice(0, 3).every((strokeItem, i) => strokeItem.path === exterior[i].path), '3 nét đầu phải là toàn bộ đường bao ngoài')
+  assert.ok(first.strokes.slice(3).every(strokeItem => strokeItem.path === interiorLong.path), 'nét cộng thêm chỉ được là nét đặc trưng bên trong dài nhất')
 })
 
 test('đường bao khối giữ được phần mảnh như chân thay vì bị đơn giản hóa nuốt mất', () => {
