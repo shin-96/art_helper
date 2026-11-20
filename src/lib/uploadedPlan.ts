@@ -392,7 +392,7 @@ export function uploadedParts(result: ProcessedImage, step: number, aiParts?: Se
       const erase = (item: GuidedPart, paths: GuidedStroke[], label: string) => part(`erase-${item.id}`, label,
         'Đầu tẩy lướt lại đúng đường dựng tạm đã xuất hiện ở các bước trước.', item.bounds,
         paths.map(mark => stroke(mark.path, `Nhấc ${mark.label.toLocaleLowerCase('vi')}`, 'Lướt đầu tẩy từ đầu đường dựng đến hết nét. Giữ phần nằm ngoài vệt tẩy nguyên vẹn.', { kind: 'erase', width: 11, opacity: 1 })),
-        'Đường dựng mờ hoặc biến mất khi đầu tẩy đi qua.', 'Tẩy riêng các đường tạm, không phủ toàn bộ vùng vẽ.')
+        'Đường dựng chỉ còn mờ nhẹ để đối chiếu vị trí, không biến mất hẳn khỏi bản vẽ.', 'Tẩy riêng các đường tạm, không phủ toàn bộ vùng vẽ.')
       const frame = frameParts(b)[0]
       return [erase(frame, frame.strokes, 'Nhấc khung bao'), ...form.map((item, i) => erase(item, [...item.strokes, ...ratio[i].strokes, ...volume[i].strokes], `Nhấc nét dựng · ${shapeName(shapes[i], b)}`))]
     }

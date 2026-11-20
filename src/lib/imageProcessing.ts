@@ -505,9 +505,35 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
   };
   const exterior = hasSilhouette ? traceSilhouette(mask, width, height) : [];
   const contourPaint = { color: '#3e4039', width: 2.35, opacity: .88 };
+  // A boundary section belongs to the form whose cells it actually runs
+  // along. Voting with the membership of the pixels around the section
+  // keeps one continuous outline in one teaching part; assigning by the
+  // nearest form centre (what trace() does from the midpoint) steals
+  // chest and mouth sections into whichever small form sits nearby and
+  // shatters the outline into scattered fragments across parts.
+  const shapeForSection = (boardPoints: ImagePoint[]): number => {
+    const votes = new Map<number, number>();
+    for (const p of boardPoints) {
+      const x = clamp(Math.round((p.x - imageBounds.x) / fit), 0, width - 1);
+      const y = clamp(Math.round((p.y - imageBounds.y) / fit), 0, height - 1);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const m = membership[ny * width + nx];
+        if (m >= 0) votes.set(m, (votes.get(m) ?? 0) + 1);
+      }
+    }
+    let winner = -1, best = 0;
+    votes.forEach((count, m) => { if (count > best) { best = count; winner = m; } });
+    return winner;
+  };
   const boundary = exterior.slice(0, 7).flatMap(chain => {
     const boardPoints = smooth(simplify(chain, 1.65).map(({ x, y }) => toBoard(x, y)), 1);
-    return splitAtCorners(boardPoints, 34, 135).map(section => ({ ...trace(section, contourPaint), exterior: true }));
+    return splitAtCorners(boardPoints, 34, 135).map(section => {
+      const item = { ...trace(section, contourPaint), exterior: true };
+      const owner = shapeForSection(section);
+      return owner >= 0 ? { ...item, shape: owner } : item;
+    });
   }).slice(0, 68);
   const interior = traceInterior(r, g, b, mask, width, height);
   const major = interior.filter(chain => chain.points.length >= 10).slice(0, 40);

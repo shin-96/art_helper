@@ -79,6 +79,31 @@ test('nét chính được xâu chuỗi liên tục: đi vòng quanh khối, đ�
   assert.ok(travel < 60, `tổng quãng bút nhảy phải nhỏ, nhận ${travel.toFixed(1)}`)
 })
 
+test('đường bao của một vật có phần phụ dính bên cạnh vẫn liền mạch trong cùng một phần dạy', () => {
+  const w = 240, h = 180
+  const pixels = new Uint8ClampedArray(w * h * 4).fill(255)
+  const fill = (x0, y0, x1, y1) => {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4
+      pixels[i] = 60; pixels[i + 1] = 55; pixels[i + 2] = 50
+    }
+  }
+  fill(30, 40, 140, 140)   // thân lớn
+  fill(140, 80, 178, 122)  // phần phụ dính vào cạnh phải, như quả táo cạnh miệng
+  const result = analyzeImagePixels(pixels, w, h)
+  const parts = uploadedParts(result, 7)
+  assert.ok(parts.length >= 1)
+  const main = parts.reduce((a, b) => (b.strokes.length > a.strokes.length ? b : a))
+  assert.ok(main.strokes.length >= 6, `phần chính phải có đủ nét bao, nhận ${main.strokes.length}`)
+  let bigGaps = 0, prev = null
+  for (const s of main.strokes) {
+    const v = s.path.match(/-?\d+\.?\d*/g).map(Number)
+    if (prev && Math.hypot(v[0] - prev.x, v[1] - prev.y) > 40) bigGaps++
+    prev = { x: v[v.length - 2], y: v[v.length - 1] }
+  }
+  assert.ok(bigGaps <= 2, `nét bao trong một phần phải liền mạch, nhận ${bigGaps} lần nhảy >40`)
+})
+
 test('bước hoàn thiện nhấn lại toàn bộ đường bao ngoài của khối, không chỉ một mép dài nhất', () => {
   const result = fakeResult()
   const exterior = [makeTrace(200, 160, 0), makeTrace(300, 250, 0), makeTrace(200, 330, 0)]

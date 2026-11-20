@@ -176,13 +176,17 @@ const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function 
             <pattern id={`${id}-grid`} width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#a9ab9d" strokeWidth=".5" opacity=".3"/></pattern>
             <mask id={`${id}-erase`} maskUnits="userSpaceOnUse" x="0" y="0" width="800" height="640">
               <rect width="800" height="640" fill="white"/>
-              {erasures.map(stroke=><path key={stroke.key} d={stroke.path} fill="none" stroke="black" strokeWidth={Math.max(8,stroke.width??12)} strokeLinecap="round"/>)}
-              {target&&erasing&&drawing&&<path d={target.path} fill="none" stroke="black" strokeWidth={Math.max(8,target.width??12)} strokeLinecap="round" pathLength="1" strokeDasharray="1" strokeDashoffset={1-progress}/>}
+              {/* The eraser lightens construction to a faint ghost instead of
+                  blanking it: a mid-grey mask stroke keeps roughly a quarter
+                  of the line visible, matching the stage's own instruction
+                  "làm nhẹ đường dựng, giữ lại mốc cần thiết". */}
+              {erasures.map(stroke=><path key={stroke.key} d={stroke.path} fill="none" stroke="#454545" strokeWidth={Math.max(8,stroke.width??12)} strokeLinecap="round"/>)}
+              {target&&erasing&&drawing&&<path d={target.path} fill="none" stroke="#454545" strokeWidth={Math.max(8,target.width??12)} strokeLinecap="round" pathLength="1" strokeDasharray="1" strokeDashoffset={1-progress}/>}
             </mask>
           </defs>
           <rect width="800" height="640" fill="#fbf9f3"/>
           {grid&&<rect data-drawing-no-export="true" width="800" height="640" fill={`url(#${id}-grid)`}/>}
-          {(showReference||step===0)&&result&&<image data-drawing-no-export="true" href={source} {...result.imageBounds} opacity={step===0?.38:.16} preserveAspectRatio="xMidYMid meet"/>}
+          {(showReference||step<=2)&&result&&<image data-drawing-no-export="true" href={source} {...result.imageBounds} opacity={step===0?.38:.16} preserveAspectRatio="xMidYMid meet"/>}
           <g data-layer="color" fill="none" strokeLinecap="round" strokeLinejoin="round">{colors.map(stroke=><path key={stroke.key} data-auto-stroke={stroke.key} d={stroke.path} {...appearance(stroke)}/>)}</g>
           <g data-layer="construction" mask={`url(#${id}-erase)`} fill="none" strokeLinecap="round" strokeLinejoin="round">{construction.map(stroke=><path key={stroke.key} data-auto-stroke={stroke.key} d={stroke.path} {...appearance(stroke)}/>)}</g>
           <g data-layer="ink" fill="none" strokeLinecap="round" strokeLinejoin="round">{ink.map(stroke=><path key={stroke.key} data-auto-stroke={stroke.key} d={stroke.path} {...appearance(stroke)}/>)}</g>
