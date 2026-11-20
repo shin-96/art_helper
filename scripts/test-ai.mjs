@@ -22,6 +22,21 @@ console.log(`Nhà cung cấp: ${config.provider} · model: ${config.model}`)
 const bytes = await readFile(new URL('../img/HWXR981asAA6fu5.jfif', import.meta.url))
 const image = `data:image/jpeg;base64,${bytes.toString('base64')}`
 
+async function probeModels() {
+  try {
+    const response = await fetch(`${config.baseUrl}/models`, { headers: { Authorization: `Bearer ${config.token}` } })
+    if (!response.ok) {
+      console.log(`  → Hỏi danh sách model cũng lỗi: HTTP ${response.status} — endpoint này có thể không thuộc về key này.`)
+      return
+    }
+    const payload = await response.json()
+    const ids = (payload.data ?? []).map((entry) => entry.id).filter(Boolean)
+    console.log(`  → Key này truy cập được ${ids.length} model: ${ids.slice(0, 40).join(', ') || '(danh sách trống)'}`)
+  } catch {
+    console.log('  → Không hỏi được danh sách model (lỗi mạng).')
+  }
+}
+
 function report(label, error) {
   console.log(`${label}: LỖI ${error?.code ?? 'UNKNOWN'} (HTTP ${error?.status ?? '?'}) — ${error?.message ?? error}`)
   if (error?.code === 'AI_UPSTREAM_ERROR') {
@@ -38,6 +53,7 @@ try {
   console.log(`CHIA PHẦN: OK — chủ thể "${parts.subject}", ${parts.parts.length} phần: ${parts.parts.map((p) => p.name).join(', ')}`)
 } catch (error) {
   report('CHIA PHẦN', error)
+  if (error?.code === 'AI_UPSTREAM_ERROR') await probeModels()
 }
 
 try {

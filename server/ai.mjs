@@ -23,7 +23,7 @@ export const DEFAULT_TIMEOUT_MS = 90_000
 export const DEFAULT_MODEL = 'gpt-4.1-mini'
 
 const PROVIDERS = [
-  { env: 'GEMINI_API_KEY', provider: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash' },
+  { env: 'GEMINI_API_KEY', provider: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash', models: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite'] },
   { env: 'OPENROUTER_API_KEY', provider: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'google/gemma-4-31b-it:free' },
   { env: 'GROQ_API_KEY', provider: 'groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'meta-llama/llama-4-scout-17b-16e-instruct' },
   { env: 'OPENAI_API_KEY', provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: DEFAULT_MODEL },
@@ -49,7 +49,7 @@ export function resolveAiConfig(env = process.env) {
   }
   for (const candidate of PROVIDERS) {
     const key = pick(env, candidate.env)
-    if (key) return { provider: candidate.provider, token: key, baseUrl: candidate.baseUrl, model: model ?? candidate.model }
+    if (key) return { provider: candidate.provider, token: key, baseUrl: candidate.baseUrl, model: model ?? candidate.model, ...(candidate.models && !model ? { models: candidate.models } : {}) }
   }
   return null
 }
@@ -64,7 +64,32 @@ function invalidResponse() {
  * 503 AI_UNAVAILABLE, 502 AI_UPSTREAM_ERROR / INVALID_AI_RESPONSE,
  * 504 AI_TIMEOUT, 422 AI_REFUSED.
  */
-export async function callAiJson({ config, prompt, image, schema, schemaName, maxOutputTokens = 1_800, timeoutMs = DEFAULT_TIMEOUT_MS, signal, refusedMessage, timeoutMessage }) {
+// A 404 from a free provider usually means "this key cannot see that model
+// name" rather than a dead key (a bad key fails earlier, with 400/401).
+// Providers may therefore carry a fallback chain; the first model that
+// answers is remembered for the rest of the process.
+const workingModels = new Map()
+
+export async function callAiJson({ config, ...rest }) {
+  const cacheKey = `${config.provider}|${config.baseUrl}`
+  const remembered = workingModels.get(cacheKey)
+  const candidates = [...new Set([remembered, ...(config.models ?? [config.model])].filter(Boolean))]
+  let lastError
+  for (const model of candidates) {
+    try {
+      const parsed = await callOnce({ config, model, ...rest })
+      if (remembered !== model) workingModels.set(cacheKey, model)
+      return parsed
+    } catch (error) {
+      lastError = error
+      if (error?.upstreamStatus !== 404) throw error
+      console.error(`[ai] provider=${config.provider} model=${model} returned 404; trying the next model`)
+    }
+  }
+  throw lastError
+}
+
+async function callOnce({ config, model, prompt, image, schema, schemaName, maxOutputTokens = 1_800, timeoutMs = DEFAULT_TIMEOUT_MS, signal, refusedMessage, timeoutMessage }) {
   const timeout = AbortSignal.timeout(timeoutMs)
   const requestSignal = signal ? AbortSignal.any([timeout, signal]) : timeout
   const attempt = async (responseFormat) => {
@@ -74,7 +99,7 @@ export async function callAiJson({ config, prompt, image, schema, schemaName, ma
       redirect: 'error',
       signal: requestSignal,
       body: JSON.stringify({
-        model: config.model,
+        model,
         max_tokens: maxOutputTokens,
         messages: [{
           role: 'user',
@@ -102,7 +127,7 @@ export async function callAiJson({ config, prompt, image, schema, schemaName, ma
   } catch (error) {
     // Never log the key; provider + model + failure kind is enough to
     // diagnose a dead key or a wrong endpoint from the server console.
-    console.error(`[ai] provider=${config.provider} model=${config.model} request failed: ${error?.name ?? 'Error'}`)
+    console.error(`[ai] provider=${config.provider} model=${model} request failed: ${error?.name ?? 'Error'}`)
     
     if (timeout.aborted) {
       throw new LessonError(504, 'AI_TIMEOUT', timeoutMessage)
@@ -113,13 +138,15 @@ export async function callAiJson({ config, prompt, image, schema, schemaName, ma
   }
 
   if (result.status !== 200 || !result.payload) {
-    console.error(`[ai] provider=${config.provider} model=${config.model} upstream status=${result.status}`)
+    console.error(`[ai] provider=${config.provider} model=${model} upstream status=${result.status}`)
   }
   if (result.status === 429) {
     throw new LessonError(503, 'AI_UNAVAILABLE', 'AI đang bận hoặc đã hết lượt miễn phí. Vui lòng thử lại sau.')
   }
   if (result.status !== 200 || !result.payload) {
-    throw new LessonError(502, 'AI_UPSTREAM_ERROR', 'Dịch vụ AI gặp lỗi. Vui lòng thử lại.')
+    const error = new LessonError(502, 'AI_UPSTREAM_ERROR', 'Dịch vụ AI gặp lỗi. Vui lòng thử lại.')
+    error.upstreamStatus = result.status
+    throw error
   }
   const message = result.payload.choices?.[0]?.message
   if (message?.refusal) {

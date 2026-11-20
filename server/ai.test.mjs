@@ -75,3 +75,19 @@ test('callAiJson ánh xạ 429 thành AI_UNAVAILABLE và refusal thành AI_REFUS
   t.mock.method(globalThis, 'fetch', async () => Response.json({ choices: [{ message: { refusal: 'no' } }] }))
   await assert.rejects(() => ask(), error => error instanceof LessonError && error.code === 'AI_REFUSED')
 })
+
+test('callAiJson lùi sang model kế khi model đầu trả 404 và nhớ model chạy được', async (t) => {
+  const seen = []
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const model = JSON.parse(init.body).model
+    seen.push(model)
+    if (model === 'm-a') return new Response('not found', { status: 404 })
+    return Response.json({ choices: [{ message: { content: '{"ok":true}' } }] })
+  })
+  const chainConfig = { provider: 'gemini', token: 'k', baseUrl: 'https://ai.example.invalid/v1', model: 'm-a', models: ['m-a', 'm-b'] }
+  const askChain = () => callAiJson({ config: chainConfig, prompt: 'p', image: 'data:image/png;base64,x', schema: { type: 'object' }, schemaName: 't', refusedMessage: 'r', timeoutMessage: 't' })
+  assert.deepEqual(await askChain(), { ok: true })
+  assert.deepEqual(seen, ['m-a', 'm-b'])
+  assert.deepEqual(await askChain(), { ok: true })
+  assert.deepEqual(seen, ['m-a', 'm-b', 'm-b'])
+})
