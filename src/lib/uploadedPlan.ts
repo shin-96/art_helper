@@ -226,21 +226,53 @@ const layerText: Record<TraceLayer, { label: string; shape: string; stroke: stri
   color: { label: 'Lên màu', shape: 'Mỗi nét cọ có màu lấy từ vùng tương ứng trong ảnh. Các mảng được bồi lần lượt, không phủ ảnh gốc lên giấy.', stroke: 'Nét cọ màu', instruction: 'Kéo một dải màu ngắn qua vùng mẫu, rồi nhấc cọ. Giữ những ranh giới sáng tối đã xác định.', checkpoint: 'Nhìn ra các mảng màu và độ đậm nhạt chính của ảnh.', correction: 'So màu với vùng ngay cạnh; không dùng một màu duy nhất cho cả khối.', kind: 'color', limit: 176 },
 }
 
-function tracedParts(result: ProcessedImage, layer: TraceLayer, traces: ImageTrace[], semanticName?: (trace: ImageTrace) => string | null) {
+const sampleEvenly = <T,>(items: T[], limit: number): T[] => items.length <= limit
+  ? items
+  : Array.from({ length: limit }, (_, i) => items[Math.floor(i * (items.length - 1) / (limit - 1))])
+
+/**
+ * Teach one body part at a time. Traces are grouped by the AI-named part they
+ * fall in (or by detected form when there is no AI), groups follow the part
+ * order, strokes outside every detected form are dropped as background
+ * noise, and shading layers are thinned to an even set of passes per part so
+ * a part is taught as a system, not dumped as dozens of stray scanlines.
+ */
+function tracedParts(result: ProcessedImage, layer: TraceLayer, traces: ImageTrace[], semantic?: (trace: ImageTrace) => SemanticPart | null) {
   const text = layerText[layer]
-  if (!traces.length) return [part(`${layer}-review`, text.label, 'Không tìm thấy nét đủ rõ ở lớp này để vẽ tự động.', result.bounds, compare(result.bounds, centerOf(result.bounds)).slice(0, 1), 'Giữ nguyên bản vẽ, không thêm nét suy đoán.', 'Đối chiếu ảnh trước khi sang lớp sau.')]
-  const candidates = traces.slice(0, text.limit)
-  const grouped = new Map<number, ImageTrace[]>()
-  for (const t of candidates) {
-    const previous = grouped.get(t.shape)
-    if (previous) previous.push(t)
-    else grouped.set(t.shape, [t])
+  const review = () => [part(`${layer}-review`, text.label, 'Không tìm thấy nét đủ rõ ở lớp này để vẽ tự động.', result.bounds, compare(result.bounds, centerOf(result.bounds)).slice(0, 1), 'Giữ nguyên bản vẽ, không thêm nét suy đoán.', 'Đối chiếu ảnh trước khi sang lớp sau.')]
+  if (!traces.length) return review()
+  const shapes = result.study?.shapes ?? []
+  const insideForm = (trace: ImageTrace) => {
+    if (semantic?.(trace)) return true
+    if (!shapes.length) return true
+    return shapes.some(shape => {
+      const marginX = shape.bounds.width * .1, marginY = shape.bounds.height * .1
+      return trace.center.x >= shape.bounds.x - marginX && trace.center.x <= shape.bounds.x + shape.bounds.width + marginX
+        && trace.center.y >= shape.bounds.y - marginY && trace.center.y <= shape.bounds.y + shape.bounds.height + marginY
+    })
   }
-  return [...grouped.entries()].sort((a, b) => a[0] - b[0]).map(([shape, list]) => {
-    const bounds = boundsOf(list)
-    const ordered = layer === 'contour' ? list : [...list].sort((a, b) => a.center.y - b.center.y || a.center.x - b.center.x)
-    const named = list.map(trace => semanticName?.(trace)).find(Boolean)
-    return part(`${layer}-${shape}`, `${text.label} ${direction(centerOf(bounds), result.bounds)}${named ? ` · ${named}` : ''}`, text.shape, bounds,
+  const usable = traces.filter(insideForm).slice(0, text.limit)
+  if (!usable.length) return review()
+  interface Group { key: string; order: number; name: string | null; shapeIndex: number; list: ImageTrace[] }
+  const grouped = new Map<string, Group>()
+  for (const trace of usable) {
+    const named = semantic?.(trace)
+    const key = named ? `ai-${named.order}` : `shape-${trace.shape}`
+    const group = grouped.get(key) ?? { key, order: named ? named.order : 100 + trace.shape, name: named?.name ?? null, shapeIndex: trace.shape, list: [] }
+    group.list.push(trace)
+    grouped.set(key, group)
+  }
+  const perPartCap = layer === 'tone' || layer === 'shadow' ? 12 : layer === 'detail' ? 14 : Number.POSITIVE_INFINITY
+  return [...grouped.values()].sort((a, b) => a.order - b.order).map((group, groupIndex) => {
+    const sorted = layer === 'contour' ? group.list : [...group.list].sort((a, b) => a.center.y - b.center.y || a.center.x - b.center.x)
+    const ordered = sampleEvenly(sorted, perPartCap)
+    const bounds = boundsOf(ordered)
+    const label = group.name
+      ? `${text.label} · ${group.name}`
+      : shapes[group.shapeIndex]
+        ? `${text.label} · ${shapeName(shapes[group.shapeIndex], result.bounds)}`
+        : `${text.label} ${direction(centerOf(bounds), result.bounds)}`
+    return part(`${layer}-${groupIndex}`, label, text.shape, bounds,
       ordered.map((trace, index) => stroke(trace.path, `${text.stroke} ${index + 1}`, strokeInstruction(layer, trace, bounds) ?? text.instruction, { kind: text.kind, color: trace.color, width: trace.width, opacity: trace.opacity })),
       text.checkpoint, text.correction)
   })
@@ -270,9 +302,9 @@ export function uploadedParts(result: ProcessedImage, step: number, aiParts?: Se
     return best
   }
   const semanticForShape = (shape: ImageShape) => semanticAt(shape.center.x, shape.center.y)
-  const semanticNameForTrace = (trace: ImageTrace) => {
+  const semanticPartForTrace = (trace: ImageTrace) => {
     const probe = trace.start ?? trace.center
-    return probe ? semanticAt(probe.x, probe.y)?.name ?? null : null
+    return probe ? semanticAt(probe.x, probe.y) : null
   }
   const geometryNote = result.study?.confidence === 'clear'
     ? 'Đọc hình bao và khoảng trống xung quanh trước khi dựng.'
@@ -300,15 +332,15 @@ export function uploadedParts(result: ProcessedImage, step: number, aiParts?: Se
       return [erase(frame, frame.strokes, 'Nhấc khung bao'), ...form.map((item, i) => erase(item, [...item.strokes, ...ratio[i].strokes, ...volume[i].strokes], `Nhấc nét dựng · ${shapeName(shapes[i], b)}`))]
     }
     case 7:
-      return tracedParts(result, 'contour', result.study?.contours ?? legacy(result.contourEdges, b), semanticNameForTrace)
+      return tracedParts(result, 'contour', result.study?.contours ?? legacy(result.contourEdges, b), semanticPartForTrace)
     case 8:
-      return tracedParts(result, 'tone', result.study?.tones ?? legacy(result.lightHatching, b), semanticNameForTrace)
+      return tracedParts(result, 'tone', result.study?.tones ?? legacy(result.lightHatching, b), semanticPartForTrace)
     case 9:
-      return tracedParts(result, 'shadow', result.study?.shadows ?? legacy(result.darkHatching, b), semanticNameForTrace)
+      return tracedParts(result, 'shadow', result.study?.shadows ?? legacy(result.darkHatching, b), semanticPartForTrace)
     case 10:
-      return tracedParts(result, 'detail', result.study?.details ?? legacy(result.fineEdges, b), semanticNameForTrace)
+      return tracedParts(result, 'detail', result.study?.details ?? legacy(result.fineEdges, b), semanticPartForTrace)
     case 11:
-      return tracedParts(result, 'color', result.study?.colors ?? [], semanticNameForTrace)
+      return tracedParts(result, 'color', result.study?.colors ?? [], semanticPartForTrace)
     case 12: {
       // Select one existing contour per form. Reassert the edge after coloring
       // only where the original image provided a usable line.

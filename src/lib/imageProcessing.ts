@@ -517,7 +517,7 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
   const brushRows = (spacing: number, widthFor: number, variant: 'color' | 'tone' | 'shadow') => {
     const strokes: ImageTrace[] = [];
     const minY = Math.floor((bounds.y - imageBounds.y) / fit), maxY = Math.ceil((bounds.y + bounds.height - imageBounds.y) / fit);
-    const maxLength = Math.max(10, Math.round(spacing * (variant === 'color' ? 3.5 : 2.5)));
+    const maxLength = Math.max(10, Math.round(spacing * (variant === 'color' ? 3.5 : variant === 'tone' ? 7 : 2.5)));
     const group = (i: number) => variant === 'color' ? mask[i] : mask[i] && (variant === 'shadow' ? luminance(sampleOf(r,g,b,i)) <= low + 10 : luminance(sampleOf(r,g,b,i)) <= high - 4);
     for (let y = minY; y <= maxY && y < height; y += spacing) {
       const paint = (from: number, to: number) => {
@@ -543,7 +543,10 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
         const i = y * width + x;
         if (x < width && group(i)) {
           if (start < 0) start = x;
-          else if (x - start >= maxLength || (x - start >= Math.max(5, spacing * .8) && colorGap(sampleOf(r,g,b,i), sampleOf(r,g,b,y * width + start)) > (variant === 'color' ? 26 : 34))) { paint(start, x); start = x; }
+          // Tone passes run the full width of the region: fur noise must not
+          // chop a shading stroke into dashes. Colour and shadow strokes
+          // still break where the sampled colour actually changes.
+          else if (x - start >= maxLength || (variant !== 'tone' && x - start >= Math.max(5, spacing * .8) && colorGap(sampleOf(r,g,b,i), sampleOf(r,g,b,y * width + start)) > (variant === 'color' ? 26 : 34))) { paint(start, x); start = x; }
         } else if (start >= 0) { paint(start, x); start = -1; }
       }
     }
@@ -557,8 +560,26 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
     if (colors.length <= 176) break;
   }
   colors = cap(colors, 176);
-  const tones = cap(brushRows(Math.max(5, Math.ceil(spacing * 1.13)), 0, 'tone'), 72);
-  const shadows = cap(brushRows(Math.max(5, Math.ceil(spacing * 1.1)), 0, 'shadow'), 62);
+  // Shading strokes must follow the form they shade: rotate each scanline
+  // segment around its own centre onto the long axis of the shape it belongs
+  // to, so a leg gets vertical hatching and a body gets lengthwise hatching
+  // instead of one global horizontal direction for the whole picture.
+  const followForm = (list: ImageTrace[]): ImageTrace[] => list.map(item => {
+    const shape = shapes[item.shape]
+    if (!shape || !item.start || !item.end) return item
+    const angle = Math.atan2(shape.axis[1].y - shape.axis[0].y, shape.axis[1].x - shape.axis[0].x)
+    if (Math.abs(angle) < 0.06 || Math.abs(Math.abs(angle) - Math.PI) < 0.06) return item
+    const cos = Math.cos(angle), sin = Math.sin(angle)
+    const rotate = (p: ImagePoint): ImagePoint => {
+      const dx = p.x - item.center.x, dy = p.y - item.center.y
+      return { x: item.center.x + dx * cos - dy * sin, y: item.center.y + dx * sin + dy * cos }
+    }
+    const start = rotate(item.start), end = rotate(item.end)
+    const points = [start, end]
+    return { ...item, path: pathFrom(points), bounds: pointBounds(points), start, end }
+  });
+  const tones = followForm(cap(brushRows(Math.max(5, Math.ceil(spacing * 1.13)), 0, 'tone'), 72));
+  const shadows = followForm(cap(brushRows(Math.max(5, Math.ceil(spacing * 1.1)), 0, 'shadow'), 62));
   return {
     bounds, imageBounds, center: toBoard(p.x, p.y), angle: p.angle * 180 / Math.PI,
     blockInPath: shapes[0].path,
