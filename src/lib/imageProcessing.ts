@@ -528,7 +528,7 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
     return winner;
   };
   const boundary = exterior.slice(0, 7).flatMap(chain => {
-    const boardPoints = smooth(simplify(chain, 1.65).map(({ x, y }) => toBoard(x, y)), 1);
+    const boardPoints = smooth(simplify(chain, 1.65).map(({ x, y }) => toBoard(x, y)), 2);
     return splitAtCorners(boardPoints, 34, 135).map(section => {
       const item = { ...trace(section, contourPaint), exterior: true };
       const owner = shapeForSection(section);
@@ -604,6 +604,19 @@ export function analyzeImagePixels(pixels: Uint8ClampedArray, width: number, hei
       return { x: item.center.x + dx * cos - dy * sin, y: item.center.y + dx * sin + dy * cos }
     }
     const start = rotate(item.start), end = rotate(item.end)
+    // A shading stroke must stay on the form it shades. Rotating a segment
+    // that sits on a thin part (tail, leg) around the whole form's axis
+    // swings its ends off the subject entirely; when either rotated end
+    // leaves the mask, keep the original scanline segment instead.
+    const onSubject = (p: ImagePoint): boolean => {
+      const x = Math.round((p.x - imageBounds.x) / fit), y = Math.round((p.y - imageBounds.y) / fit)
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy
+        if (nx >= 0 && ny >= 0 && nx < width && ny < height && mask[ny * width + nx]) return true
+      }
+      return false
+    }
+    if (!onSubject(start) || !onSubject(end)) return item
     const points = [start, end]
     return { ...item, path: pathFrom(points), bounds: pointBounds(points), start, end }
   });
