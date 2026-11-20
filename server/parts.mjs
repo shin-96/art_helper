@@ -24,40 +24,56 @@ export const partsSchema = object({
   }), 1, 8),
 })
 
-const isIntIn = (value, min, max) => Number.isInteger(value) && value >= min && value <= max
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
+const asNumber = (value) => (typeof value === 'number' ? value
+  : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN)
+const truncate = (value, max) => (value.length > max ? value.slice(0, max).trimEnd() : value)
 
 /**
- * Validate and normalize the AI part list. Boxes arrive as integers in
- * 0..1000 image coordinates and leave as fractions (0..1) the client can map
- * onto the drawing board. Returns null for anything unusable so the caller
- * can fall back to the local analysis instead of teaching wrong names.
+ * Normalize the AI part list. Boxes are asked for as 0..1000 coordinates and
+ * leave as fractions (0..1) the client can map onto the drawing board.
+ * Real models — above all in the json_object fallback mode, where no schema
+ * constrains them — answer with floats, 0..1 fractions, overlong notes or a
+ * string order; each part is repaired where that is safe and dropped where
+ * it is not, instead of one imperfect part discarding the whole answer.
+ * Returns null only when nothing usable remains, so the caller can fall
+ * back to the local analysis instead of teaching wrong names.
  */
 export function validateParts(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  if (typeof value.subject !== 'string' || !value.subject.trim() || value.subject.length > 160) return null
-  if (!Array.isArray(value.parts) || value.parts.length < 1 || value.parts.length > 8) return null
+  if (typeof value.subject !== 'string' || !value.subject.trim()) return null
+  if (!Array.isArray(value.parts) || value.parts.length < 1) return null
   const parts = []
-  for (const part of value.parts) {
-    if (!part || typeof part !== 'object') return null
-    const name = typeof part.name === 'string' ? part.name.trim() : ''
-    const note = typeof part.note === 'string' ? part.note.trim() : ''
-    if (!name || name.length > 48 || !note || note.length > 280) return null
-    if (!Number.isInteger(part.order)) return null
+  for (const part of value.parts.slice(0, 8)) {
+    if (!part || typeof part !== 'object') continue
+    const name = truncate(typeof part.name === 'string' ? part.name.trim() : '', 48)
+    const note = truncate(typeof part.note === 'string' ? part.note.trim() : '', 280)
+    if (!name || !note) continue
     const box = part.box
-    if (!box || typeof box !== 'object') return null
-    if (!isIntIn(box.x, 0, 999) || !isIntIn(box.y, 0, 999)) return null
-    if (!isIntIn(box.width, 10, 1000) || !isIntIn(box.height, 10, 1000)) return null
-    const width = Math.min(box.width, 1000 - box.x)
-    const height = Math.min(box.height, 1000 - box.y)
+    if (!box || typeof box !== 'object') continue
+    let x = asNumber(box.x)
+    let y = asNumber(box.y)
+    let width = asNumber(box.width)
+    let height = asNumber(box.height)
+    if (![x, y, width, height].every(Number.isFinite)) continue
+    if (Math.max(x, y, width, height) <= 1) {
+      x *= 1000; y *= 1000; width *= 1000; height *= 1000
+    }
+    x = Math.round(x); y = Math.round(y); width = Math.round(width); height = Math.round(height)
+    if (x >= 1000 || y >= 1000 || width <= 0 || height <= 0) continue
+    x = clamp(x, 0, 999); y = clamp(y, 0, 999)
+    width = clamp(width, 10, 1000 - x); height = clamp(height, 10, 1000 - y)
+    const order = asNumber(part.order)
     parts.push({
       name,
       note,
-      order: part.order,
-      box: { x: box.x / 1000, y: box.y / 1000, width: width / 1000, height: height / 1000 },
+      order: Number.isFinite(order) ? order : parts.length + 1,
+      box: { x: x / 1000, y: y / 1000, width: width / 1000, height: height / 1000 },
     })
   }
+  if (!parts.length) return null
   parts.sort((a, b) => a.order - b.order || (b.box.width * b.box.height) - (a.box.width * a.box.height))
-  return { subject: value.subject.trim(), parts: parts.map((part, i) => ({ ...part, order: i + 1 })) }
+  return { subject: truncate(value.subject.trim(), 160), parts: parts.map((part, i) => ({ ...part, order: i + 1 })) }
 }
 
 function partsPrompt() {

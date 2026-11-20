@@ -31,7 +31,25 @@ test('validateParts loại payload hỏng thay vì dạy sai tên bộ phận', 
   assert.equal(validateParts({ subject: 'X', parts: [] }), null)
   assert.equal(validateParts({ subject: 'X', parts: [{ name: '', note: 'n', order: 1, box: { x: 0, y: 0, width: 100, height: 100 } }] }), null)
   assert.equal(validateParts({ subject: 'X', parts: [{ name: 'A', note: 'n', order: 1, box: { x: 1200, y: 0, width: 100, height: 100 } }] }), null)
-  assert.equal(validateParts({ subject: 'X', parts: [{ name: 'A', note: 'n', order: 1, box: { x: 0, y: 0, width: 3, height: 100 } }] }), null)
+  assert.equal(validateParts({ subject: 'X', parts: [{ name: 'A', note: 'n', order: 1, box: { x: 0, y: 0, width: 0, height: 100 } }] }), null)
+})
+
+test('validateParts sửa output kiểu model free: số thực, tỉ lệ 0..1, ghi chú dài, order dạng chữ', () => {
+  const result = validateParts({
+    subject: 'Cáo trắng',
+    parts: [
+      { name: 'Thân', note: 'x'.repeat(400), order: '1', box: { x: 0.15, y: 0.25, width: 0.45, height: 0.5 } },
+      { name: 'Đầu', note: 'Đầu gần tròn.', order: 2, box: { x: 550.4, y: 80.6, width: 330.2, height: 300 } },
+      { name: 'Bịa', note: 'Phần này nằm ngoài ảnh.', order: 3, box: { x: 1400, y: 0, width: 100, height: 100 } },
+    ],
+  })
+  assert.ok(result)
+  assert.deepEqual(result.parts.map(p => p.name), ['Thân', 'Đầu'])
+  assert.deepEqual(result.parts[0].box, { x: 0.15, y: 0.25, width: 0.45, height: 0.5 })
+  assert.equal(result.parts[0].note.length, 280)
+  assert.deepEqual(result.parts[1].box, { x: 0.55, y: 0.081, width: 0.33, height: 0.3 })
+  const sliver = validateParts({ subject: 'X', parts: [{ name: 'A', note: 'n', order: 1, box: { x: 0, y: 0, width: 3, height: 100 } }] })
+  assert.equal(sliver.parts[0].box.width, 0.01)
 })
 
 test('generateParts đọc content, gửi đúng schema và trả phần đã chuẩn hóa', async (t) => {
