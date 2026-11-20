@@ -9,6 +9,7 @@ import DrawingBoard, { type DrawingBoardHandle } from './components/DrawingBoard
 import FocusGuide from './components/FocusGuide'
 import { materialize, type GuidedPart, type PracticeMode, type SketchStroke } from './lib/guidedDrawing'
 import type { PracticeScore } from './lib/practice'
+import type { SemanticPart } from './lib/semanticParts'
 import { SAMPLE_LESSON } from './data/lessons'
 import { STAGES, createLesson } from './data/stages'
 import type { Lesson } from './types'
@@ -24,6 +25,7 @@ export default function App() {
   const [mode, setMode] = useState<PracticeMode>('identify')
   const [practice, setPractice] = useState(false)
   const [practiceResult, setPracticeResult] = useState<PracticeScore | null>(null)
+  const [aiParts, setAiParts] = useState<SemanticPart[] | null>(null)
   const [finishedSteps, setFinishedSteps] = useState<number[]>([])
   const [sketchStrokes, setSketchStrokes] = useState<SketchStroke[]>([])
   const [replayToken, setReplayToken] = useState(0)
@@ -158,6 +160,7 @@ export default function App() {
     setLesson(createLesson(displayName, level === 'advanced' ? 'Nâng cao' : level === 'intermediate' ? 'Trung cấp' : 'Mới bắt đầu'))
     setLessonSource('demo')
     setApiMessage('')
+    setAiParts(null)
     setLoading(true)
     try {
       const response = await fetch('/api/analyze', {
@@ -170,6 +173,21 @@ export default function App() {
         setLesson(result.lesson as Lesson)
         setLessonSource('ai')
         setApiMessage('Bài hướng dẫn được AI điều chỉnh theo tỉ lệ, bố cục và ánh sáng trong ảnh này.')
+        // Semantic part names are an optional second pass: when the server
+        // can see the image, blocks and strokes get real part names (đầu,
+        // thân, quả táo...). Any failure here leaves the local labels as-is.
+        try {
+          const partsResponse = await fetch('/api/parts', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: dataUrl }), signal: controller.signal,
+          })
+          const partsResult = await partsResponse.json()
+          if (requestId !== analysisSequence.current) return
+          if (partsResponse.ok && Array.isArray(partsResult.parts) && partsResult.parts.length) {
+            setAiParts(partsResult.parts as SemanticPart[])
+            setApiMessage(`AI đã nhận diện ${partsResult.parts.length} bộ phận (${partsResult.parts.map((part: SemanticPart) => part.name).join(', ')}) và gắn tên vào từng khối, từng nét của bài.`)
+          }
+        } catch { /* Part naming is optional; local labels remain. */ }
       } else if (result.code === 'AI_NOT_CONFIGURED') {
         setApiMessage('Ảnh được minh họa trên máy bạn. Bài hướng dẫn chì tổng quát sẵn sàng; bật máy chủ AI để nhận phân tích riêng từ ảnh.')
       } else {
@@ -205,6 +223,7 @@ export default function App() {
     setShowGuides(true)
     setSaved(false)
     setApiMessage('')
+    setAiParts(null)
     setNotice('Đã quay về bài học mẫu Quả lê bên cửa sổ.')
   }
 
@@ -302,7 +321,7 @@ export default function App() {
           <div className="stage-toolbar"><div className="stage-breadcrumb"><span>BUỔI 01</span><ChevronRight size={13}/><strong>{currentStep?.shortTitle ?? 'Quan sát'}</strong></div><div className="stage-controls"><span className="control-caption">BÀN VẼ</span><button className={'toolbar-icon ' + (showGrid ? 'toolbar-selected' : '')} title="Bật lưới tỷ lệ" aria-label="Bật lưới tỷ lệ" onClick={() => setShowGrid(!showGrid)}><Grid2X2 size={15}/></button><button className={'toolbar-icon ' + (showReference ? 'toolbar-selected' : '')} title="Bật/tắt ảnh mẫu phủ mờ" aria-label="Bật/tắt ảnh mẫu phủ mờ" onClick={() => setShowReference(!showReference)}><Eye size={15}/></button><span className="toolbar-separator"/><button className="toolbar-icon" title="Thu nhỏ" aria-label="Thu nhỏ" onClick={() => setZoom(Math.max(70, zoom - 10))}><ZoomOut size={15}/></button><button className="zoom-value" onClick={() => setZoom(100)} title="Đưa về 100%">{zoom}%</button><button className="toolbar-icon" title="Phóng to" aria-label="Phóng to" onClick={() => setZoom(Math.min(130, zoom + 10))}><ZoomIn size={15}/></button><span className="toolbar-separator"/><button className="toolbar-icon" title="Tải tranh về máy" aria-label="Tải tranh về máy" onClick={savePNG}><ArrowDown size={15}/></button></div></div>
           <div className={'canvas-mat ' + (dragging ? 'canvas-dragging' : '')}>
             {dragging && <div className="drop-overlay"><span><CloudUpload size={34}/><b>Thả ảnh vào đây</b><small>Mình sẽ bắt đầu dựng bài học từ ảnh của bạn.</small></span></div>}
-            <DrawingBoard ref={boardRef} imageUrl={reference} step={activeStep} partIndex={partIndex} strokeIndex={strokeIndex} mode={mode} onPlansReady={setPlans} sketchStrokes={sketchStrokes} replayToken={replayToken} grid={showGrid} guides={showGuides} showReference={showReference} zoom={zoom} isPlaying={isPlaying && (mode === 'simulate' || mode === 'draw')} playbackSpeed={playbackSpeed} onPlaybackEnd={finishStroke} onProgress={(progress:number) => { if (progress > 0) setApiMessage('') }} practice={practice} onPracticeScore={setPracticeResult}/>
+            <DrawingBoard ref={boardRef} imageUrl={reference} step={activeStep} partIndex={partIndex} strokeIndex={strokeIndex} mode={mode} onPlansReady={setPlans} sketchStrokes={sketchStrokes} replayToken={replayToken} grid={showGrid} guides={showGuides} showReference={showReference} zoom={zoom} isPlaying={isPlaying && (mode === 'simulate' || mode === 'draw')} playbackSpeed={playbackSpeed} onPlaybackEnd={finishStroke} onProgress={(progress:number) => { if (progress > 0) setApiMessage('') }} practice={practice} onPracticeScore={setPracticeResult} aiParts={aiParts}/>
             <div className="canvas-corner-label"><span className="corner-registration">＋</span> GIẤY ĐỊNH LƯỢNG 200 GSM <span className="canvas-corner-dot"/></div>
           </div>
           <div className="under-canvas"><span className="drawing-hint"><span/>{practice ? 'Đang tự luyện · vẽ đè lên nét đứt mờ trên giấy' : 'Ứng dụng tự vẽ · kéo giấy để di chuyển'}</span><button className={'guides-toggle ' + (showGuides ? 'guides-on' : '')} onClick={() => setShowGuides(!showGuides)}><i/>{showGuides ? 'Khối hướng dẫn đang bật' : 'Hiện khối hướng dẫn'}</button></div>

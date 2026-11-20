@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
 import express from 'express'
 import { DEFAULT_TIMEOUT_MS, generateLesson, LessonError, LESSON_MODEL, focuses, levels } from './lesson.mjs'
+import { generateParts } from './parts.mjs'
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) })
 
@@ -122,6 +123,34 @@ app.post('/api/analyze', requireAnalyzeRequest, express.json({ limit: MAX_JSON_B
       signal: controller.signal,
     })
     if (!controller.signal.aborted) res.json({ lesson, source: 'ai' })
+  } catch (error) {
+    if (!controller.signal.aborted) next(error)
+  } finally {
+    res.off('close', abortOnClose)
+  }
+})
+
+app.post('/api/parts', requireAnalyzeRequest, express.json({ limit: MAX_JSON_BYTES, inflate: false }), async (req, res, next) => {
+  const { image } = req.body ?? {}
+  const controller = new AbortController()
+  const abortOnClose = () => {
+    if (!res.writableEnded) controller.abort()
+  }
+  res.once('close', abortOnClose)
+
+  try {
+    const imageDataUrl = validateImage(image)
+    const configuredTimeout = Number(process.env.OPENAI_TIMEOUT_MS)
+    const timeoutMs = Number.isInteger(configuredTimeout) && configuredTimeout > 0 && configuredTimeout <= 2_147_483_647
+      ? configuredTimeout
+      : DEFAULT_TIMEOUT_MS
+    const result = await generateParts({
+      apiKey: res.locals.apiKey,
+      image: imageDataUrl,
+      timeoutMs,
+      signal: controller.signal,
+    })
+    if (!controller.signal.aborted) res.json({ subject: result.subject, parts: result.parts, source: 'ai' })
   } catch (error) {
     if (!controller.signal.aborted) next(error)
   } finally {

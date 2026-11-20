@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import { processImage, rasterizeSvg } from '../lib/imageProcessing'
 import type { ProcessedImage } from '../lib/imageProcessing'
 import { scoreStroke, type PracticeScore } from '../lib/practice'
+import type { SemanticPart } from '../lib/semanticParts'
 import { normalizeParts, uploadedParts, type GuidedPart, type PracticeMode, type SketchStroke, type StrokeStyle } from '../lib/guidedDrawing'
 import { STAGES } from '../data/stages'
 
@@ -28,11 +29,13 @@ export interface DrawingBoardProps {
    *  and the finished attempt is scored against the demonstrated stroke. */
   practice?: boolean
   onPracticeScore?: (result: PracticeScore) => void
+  /** Subject parts named by AI vision, when the server provided them. */
+  aiParts?: SemanticPart[] | null
 }
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 const appearance = (stroke: StrokeStyle) => ({ stroke: stroke.color ?? (stroke.kind === 'construction' ? '#b58668' : '#3e453c'), strokeWidth: stroke.width ?? 1.4, opacity: stroke.opacity ?? (stroke.kind === 'construction' ? .55 : .85) })
 
-const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function DrawingBoard({ imageUrl, step, partIndex, strokeIndex, mode, onPlansReady, sketchStrokes, replayToken, grid, guides, showReference, zoom, isPlaying, playbackSpeed, onPlaybackEnd, onProgress, practice = false, onPracticeScore }, ref) {
+const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function DrawingBoard({ imageUrl, step, partIndex, strokeIndex, mode, onPlansReady, sketchStrokes, replayToken, grid, guides, showReference, zoom, isPlaying, playbackSpeed, onPlaybackEnd, onProgress, practice = false, onPracticeScore, aiParts = null }, ref) {
   const id = `sketch-${useId().replace(/[^a-zA-Z0-9]/g,'')}`
   const source = imageUrl ?? '/pear-reference.svg'
   const [loaded, setLoaded] = useState<{ source: string; result: ProcessedImage } | null>(null)
@@ -40,7 +43,7 @@ const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function 
   const [retry, setRetry] = useState(0)
   const [feedback, setFeedback] = useState('')
   const result = loaded?.source === source ? loaded.result : null
-  const plans = useMemo(() => result ? STAGES.map((_, index) => normalizeParts(uploadedParts(result,index))) : [], [result])
+  const plans = useMemo(() => result ? STAGES.map((_, index) => normalizeParts(uploadedParts(result, index, aiParts))) : [], [result, aiParts])
   useEffect(() => { onPlansReady(plans) }, [plans,onPlansReady])
   const part = plans[step]?.[partIndex]
   const target = part?.strokes[strokeIndex]
