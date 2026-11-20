@@ -82,13 +82,12 @@ test('Express API over HTTP', { timeout: 15_000 }, async (t) => {
     assert.equal(upstream.mock.callCount(), 0)
   })
 
-  await t.test('passes valid images to the Responses API and returns the lesson', async (t) => {
+  await t.test('passes valid images to the AI provider and returns the lesson', async (t) => {
     setEnv(t, 'OPENAI_API_KEY', 'integration-test-key')
     setEnv(t, 'OPENAI_TIMEOUT_MS', '5000')
     const lesson = createLesson('Tĩnh vật', 'Nâng cao')
     const upstream = t.mock.method(globalThis, 'fetch', async () => Response.json({
-      status: 'completed',
-      output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(lesson) }] }],
+      choices: [{ message: { content: JSON.stringify(lesson) } }],
     }))
 
     const health = await get('/api/health')
@@ -99,20 +98,20 @@ test('Express API over HTTP', { timeout: 15_000 }, async (t) => {
     assert.equal(upstream.mock.callCount(), 1)
 
     const [url, options] = upstream.mock.calls[0].arguments
-    assert.equal(url, 'https://api.openai.com/v1/responses')
+    assert.equal(url, 'https://api.openai.com/v1/chat/completions')
     assert.equal(options.method, 'POST')
     assert.equal(options.headers.Authorization, 'Bearer integration-test-key')
     const request = JSON.parse(options.body)
     assert.equal(request.model, 'gpt-4.1-mini')
-    assert.equal(request.input[0].role, 'user')
-    const [prompt, image] = request.input[0].content
-    assert.equal(prompt.type, 'input_text')
+    assert.equal(request.messages[0].role, 'user')
+    const [prompt, image] = request.messages[0].content
+    assert.equal(prompt.type, 'text')
     assert.match(prompt.text, /Nâng cao.*than vẽ/)
-    assert.deepEqual(image, { type: 'input_image', image_url: input.image, detail: 'high' })
-    assert.equal(request.text.format.type, 'json_schema')
-    assert.equal(request.text.format.strict, true)
-    assert.equal(request.text.format.schema.properties.steps.minItems, 13)
-    assert.equal(request.text.format.schema.properties.steps.maxItems, 13)
+    assert.deepEqual(image, { type: 'image_url', image_url: { url: input.image } })
+    assert.equal(request.response_format.type, 'json_schema')
+    assert.equal(request.response_format.json_schema.strict, true)
+    assert.equal(request.response_format.json_schema.schema.properties.steps.minItems, 13)
+    assert.equal(request.response_format.json_schema.schema.properties.steps.maxItems, 13)
 
     const atLimit = Buffer.alloc(maxImageBytes)
     PNG.copy(atLimit)
@@ -126,7 +125,7 @@ test('Express API over HTTP', { timeout: 15_000 }, async (t) => {
     setEnv(t, 'OPENAI_API_KEY', 'integration-test-key')
     setEnv(t, 'OPENAI_TIMEOUT_MS', '5000')
     const upstream = t.mock.method(globalThis, 'fetch', async () => Response.json({
-      output_text: JSON.stringify({ ...createLesson('Tĩnh vật'), steps: createLesson('Tĩnh vật').steps.slice(1) }),
+      choices: [{ message: { content: JSON.stringify({ ...createLesson('Tĩnh vật'), steps: createLesson('Tĩnh vật').steps.slice(1) }) } }],
     }))
     await assertError(await analyze(input), 502, 'INVALID_AI_RESPONSE')
     upstream.mock.mockImplementation(async () => Response.json({ error: 'OpenAI error details' }, { status: 429 }))
@@ -135,8 +134,7 @@ test('Express API over HTTP', { timeout: 15_000 }, async (t) => {
     await assertError(limited, 503, 'AI_UNAVAILABLE')
     assert.doesNotMatch(limitedBody, /OpenAI error details/)
     upstream.mock.mockImplementation(async () => Response.json({
-      status: 'completed',
-      output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'Provider refusal' }] }],
+      choices: [{ message: { refusal: 'Provider refusal' } }],
     }))
     await assertError(await analyze(input), 422, 'AI_REFUSED')
   })

@@ -7,6 +7,8 @@ import { app } from './index.mjs'
 import { analyzeImagePixels } from '../src/lib/imageProcessing.ts'
 import { uploadedParts } from '../src/lib/uploadedPlan.ts'
 
+const testConfig = { provider: 'test', token: 'test-key', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' }
+
 const validPayload = {
   subject: 'Chó trắng ôm quả táo',
   parts: [
@@ -32,17 +34,16 @@ test('validateParts loại payload hỏng thay vì dạy sai tên bộ phận', 
   assert.equal(validateParts({ subject: 'X', parts: [{ name: 'A', note: 'n', order: 1, box: { x: 0, y: 0, width: 3, height: 100 } }] }), null)
 })
 
-test('generateParts đọc output_text, gửi đúng schema và trả phần đã chuẩn hóa', async (t) => {
+test('generateParts đọc content, gửi đúng schema và trả phần đã chuẩn hóa', async (t) => {
   const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({
-    status: 'completed',
-    output_text: JSON.stringify(validPayload),
+    choices: [{ message: { content: JSON.stringify(validPayload) } }],
   }))
-  const result = await generateParts({ apiKey: 'test-key', image: 'data:image/png;base64,AAAA' })
+  const result = await generateParts({ config: testConfig, image: 'data:image/png;base64,AAAA' })
   assert.equal(fetchMock.mock.callCount(), 1)
   const [, init] = fetchMock.mock.calls[0].arguments
   const body = JSON.parse(init.body)
-  assert.equal(body.text.format.name, 'drawing_parts')
-  assert.equal(body.text.format.strict, true)
+  assert.equal(body.response_format.json_schema.name, 'drawing_parts')
+  assert.equal(body.response_format.json_schema.strict, true)
   assert.equal(result.parts.length, 2)
   assert.equal(result.parts[1].name, 'Đầu')
 })
@@ -50,7 +51,7 @@ test('generateParts đọc output_text, gửi đúng schema và trả phần đ�
 test('generateParts ánh xạ 429 thành AI_UNAVAILABLE như bài học', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => new Response('busy', { status: 429 }))
   await assert.rejects(
-    () => generateParts({ apiKey: 'test-key', image: 'data:image/png;base64,AAAA' }),
+    () => generateParts({ config: testConfig, image: 'data:image/png;base64,AAAA' }),
     (error) => error instanceof LessonError && error.code === 'AI_UNAVAILABLE',
   )
 })
@@ -68,10 +69,11 @@ test('POST /api/parts: chưa có key thì 503, có key thì trả bộ phận đ
   const body = JSON.stringify({ image: `data:image/png;base64,${PNG.toString('base64')}` })
   const post = () => realFetch(`${origin}/api/parts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
 
-  const previous = process.env.OPENAI_API_KEY
-  t.after(() => { if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous })
+  const envNames = ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'AI_API_KEY', 'AI_BASE_URL', 'AI_MODEL']
+  const previous = Object.fromEntries(envNames.map(name => [name, process.env[name]]))
+  t.after(() => { for (const name of envNames) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name] } })
 
-  delete process.env.OPENAI_API_KEY
+  for (const name of envNames) delete process.env[name]
   const noKey = await post()
   assert.equal(noKey.status, 503)
   assert.equal((await noKey.json()).code, 'AI_NOT_CONFIGURED')
@@ -79,7 +81,7 @@ test('POST /api/parts: chưa có key thì 503, có key thì trả bộ phận đ
   process.env.OPENAI_API_KEY = 'test-key'
   t.mock.method(globalThis, 'fetch', async (url, init) => {
     if (String(url).includes('api.openai.com')) {
-      return Response.json({ status: 'completed', output_text: JSON.stringify(validPayload) })
+      return Response.json({ choices: [{ message: { content: JSON.stringify(validPayload) } }] })
     }
     return realFetch(url, init)
   })

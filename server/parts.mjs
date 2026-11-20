@@ -1,6 +1,4 @@
-import { DEFAULT_TIMEOUT_MS, LessonError, LESSON_MODEL } from './lesson.mjs'
-
-const RESPONSES_URL = 'https://api.openai.com/v1/responses'
+import { callAiJson, DEFAULT_TIMEOUT_MS, LessonError } from './ai.mjs'
 
 const text = { type: 'string' }
 const list = (items, minItems, maxItems) => ({ type: 'array', items, minItems, maxItems })
@@ -79,74 +77,19 @@ function invalidResponse() {
   return new LessonError(502, 'INVALID_AI_RESPONSE', 'AI trả về danh sách bộ phận không hợp lệ. Vui lòng thử lại.')
 }
 
-function getOutputText(payload) {
-  if (!payload || (payload.status && payload.status !== 'completed')) {
-    throw invalidResponse()
-  }
-  const content = Array.isArray(payload.output)
-    ? payload.output.flatMap((item) => item?.type === 'message' && Array.isArray(item.content) ? item.content : [])
-    : []
-  if (content.some((part) => part?.type === 'refusal')) {
-    throw new LessonError(422, 'AI_REFUSED', 'AI không thể nhận diện bộ phận từ ảnh này. Hãy thử ảnh khác.')
-  }
-  if (typeof payload.output_text === 'string' && payload.output_text.trim()) {
-    return payload.output_text
-  }
-  return content
-    .filter((part) => part?.type === 'output_text' && typeof part.text === 'string')
-    .map((part) => part.text)
-    .join('')
-}
-
-export async function generateParts({ apiKey, image, timeoutMs = DEFAULT_TIMEOUT_MS, signal }) {
-  const timeout = AbortSignal.timeout(timeoutMs)
-  const requestSignal = signal ? AbortSignal.any([timeout, signal]) : timeout
-  let payload
-  try {
-    const response = await fetch(RESPONSES_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      redirect: 'error',
-      signal: requestSignal,
-      body: JSON.stringify({
-        model: LESSON_MODEL,
-        store: false,
-        max_output_tokens: 1_800,
-        input: [{
-          role: 'user',
-          content: [
-            { type: 'input_text', text: partsPrompt() },
-            { type: 'input_image', image_url: image, detail: 'high' },
-          ],
-        }],
-        text: { format: { type: 'json_schema', name: 'drawing_parts', strict: true, schema: partsSchema } },
-      }),
-    })
-
-    if (!response.ok) {
-      await response.body?.cancel()
-      if (response.status === 429) {
-        throw new LessonError(503, 'AI_UNAVAILABLE', 'AI đang bận. Vui lòng thử lại sau.')
-      }
-      throw new LessonError(502, 'AI_UPSTREAM_ERROR', 'Dịch vụ AI gặp lỗi. Vui lòng thử lại.')
-    }
-    payload = await response.json()
-  } catch (error) {
-    if (timeout.aborted) {
-      throw new LessonError(504, 'AI_TIMEOUT', 'AI mất quá nhiều thời gian để nhận diện ảnh. Vui lòng thử lại.')
-    }
-    if (signal?.aborted || error instanceof LessonError) throw error
-    if (error instanceof SyntaxError) throw invalidResponse()
-    throw new LessonError(502, 'AI_UPSTREAM_ERROR', 'Không kết nối được với dịch vụ AI. Vui lòng thử lại.')
-  }
-
-  const outputText = getOutputText(payload)
-  let parsed
-  try {
-    parsed = JSON.parse(outputText)
-  } catch {
-    throw invalidResponse()
-  }
+export async function generateParts({ config, image, timeoutMs = DEFAULT_TIMEOUT_MS, signal }) {
+  const parsed = await callAiJson({
+    config,
+    prompt: partsPrompt(),
+    image,
+    schema: partsSchema,
+    schemaName: 'drawing_parts',
+    maxOutputTokens: 1_800,
+    timeoutMs,
+    signal,
+    refusedMessage: 'AI không thể nhận diện bộ phận từ ảnh này. Hãy thử ảnh khác.',
+    timeoutMessage: 'AI mất quá nhiều thời gian để nhận diện ảnh. Vui lòng thử lại.',
+  })
   const parts = validateParts(parsed)
   if (!parts) throw invalidResponse()
   return parts

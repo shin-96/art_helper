@@ -1,0 +1,77 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { callAiJson, LessonError, resolveAiConfig } from './ai.mjs'
+
+test('resolveAiConfig: không có key nào thì null để app dùng fallback local', () => {
+  assert.equal(resolveAiConfig({}), null)
+  assert.equal(resolveAiConfig({ OPENAI_API_KEY: '   ' }), null)
+})
+
+test('resolveAiConfig: key miễn phí thắng OpenAI, AI_MODEL ghi đè model mặc định', () => {
+  const gemini = resolveAiConfig({ OPENAI_API_KEY: 'sk-paid', GEMINI_API_KEY: 'gem-key' })
+  assert.equal(gemini.provider, 'gemini')
+  assert.equal(gemini.model, 'gemini-2.5-flash')
+  assert.match(gemini.baseUrl, /generativelanguage\.googleapis\.com/)
+
+  const openrouter = resolveAiConfig({ OPENROUTER_API_KEY: 'or-key', AI_MODEL: 'some/model:free' })
+  assert.equal(openrouter.provider, 'openrouter')
+  assert.equal(openrouter.model, 'some/model:free')
+
+  const groq = resolveAiConfig({ GROQ_API_KEY: 'groq-key' })
+  assert.equal(groq.provider, 'groq')
+
+  const openai = resolveAiConfig({ OPENAI_API_KEY: 'sk-paid' })
+  assert.equal(openai.provider, 'openai')
+  assert.equal(openai.model, 'gpt-4.1-mini')
+})
+
+test('resolveAiConfig: AI_BASE_URL tùy chỉnh thắng mọi preset', () => {
+  const custom = resolveAiConfig({ AI_BASE_URL: 'https://example.invalid/v1', AI_API_KEY: 'k' })
+  assert.equal(custom.provider, 'custom')
+  assert.equal(custom.baseUrl, 'https://example.invalid/v1')
+})
+
+const config = { provider: 'test', token: 'k', baseUrl: 'https://ai.example.invalid/v1', model: 'm' }
+const schema = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false }
+const ask = (overrides = {}) => callAiJson({
+  config,
+  prompt: 'trả JSON',
+  image: 'data:image/png;base64,AAAA',
+  schema,
+  schemaName: 'test_schema',
+  refusedMessage: 'bị từ chối',
+  timeoutMessage: 'quá giờ',
+  ...overrides,
+})
+
+test('callAiJson gửi schema strict trước và parse content trả về', async (t) => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({
+    choices: [{ message: { content: '{"ok":true}' } }],
+  }))
+  assert.deepEqual(await ask(), { ok: true })
+  assert.equal(fetchMock.mock.callCount(), 1)
+  const [url, init] = fetchMock.mock.calls[0].arguments
+  assert.equal(url, 'https://ai.example.invalid/v1/chat/completions')
+  const body = JSON.parse(init.body)
+  assert.equal(body.response_format.type, 'json_schema')
+  assert.equal(body.response_format.json_schema.strict, true)
+  assert.equal(body.messages[0].content[1].type, 'image_url')
+})
+
+test('callAiJson lùi về json_object khi nhà cung cấp từ chối schema (400)', async (t) => {
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++
+    if (calls === 1) return new Response('bad schema', { status: 400 })
+    return Response.json({ choices: [{ message: { content: '```json\n{"ok":true}\n```' } }] })
+  })
+  assert.deepEqual(await ask(), { ok: true })
+  assert.equal(calls, 2)
+})
+
+test('callAiJson ánh xạ 429 thành AI_UNAVAILABLE và refusal thành AI_REFUSED', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => new Response('busy', { status: 429 }))
+  await assert.rejects(() => ask(), error => error instanceof LessonError && error.code === 'AI_UNAVAILABLE')
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ choices: [{ message: { refusal: 'no' } }] }))
+  await assert.rejects(() => ask(), error => error instanceof LessonError && error.code === 'AI_REFUSED')
+})

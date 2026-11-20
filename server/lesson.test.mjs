@@ -5,6 +5,7 @@ import { generateLesson, lessonSchema, validateLesson } from './lesson.mjs'
 
 const lesson = createLesson('Tĩnh vật', 'Cơ bản')
 const step = lesson.steps[0]
+const testConfig = { provider: 'test', token: 'mock-key', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' }
 
 test('chấp nhận đúng 13 giai đoạn, nhãn và pha theo hợp đồng', () => {
   assert.equal(validateLesson(lesson), true)
@@ -42,22 +43,21 @@ test('bài học mặc định trình diễn từng nét, không đòi người 
 
 test('gửi đúng thứ tự 13 giai đoạn và hướng dẫn bài trình diễn tự vẽ', async (t) => {
   const fetchMock = t.mock.method(globalThis, 'fetch', async () => Response.json({
-    status: 'completed',
-    output_text: JSON.stringify(lesson),
+    choices: [{ message: { content: JSON.stringify(lesson) } }],
   }))
   const image = 'data:image/png;base64,AA=='
 
-  const result = await generateLesson({ apiKey: 'mock-key', image, level: 'intermediate', focus: 'charcoal' })
+  const result = await generateLesson({ config: testConfig, image, level: 'intermediate', focus: 'charcoal' })
 
   assert.deepEqual(result, lesson)
   assert.equal(fetchMock.mock.callCount(), 1)
   const [, { body }] = fetchMock.mock.calls[0].arguments
   const request = JSON.parse(body)
-  const [instructions, reference] = request.input[0].content
-  assert.equal(instructions.type, 'input_text')
-  assert.deepEqual(reference, { type: 'input_image', image_url: image, detail: 'high' })
-  assert.deepEqual(request.text.format, {
-    type: 'json_schema', name: 'drawing_lesson', strict: true, schema: lessonSchema,
+  const [instructions, reference] = request.messages[0].content
+  assert.equal(instructions.type, 'text')
+  assert.deepEqual(reference, { type: 'image_url', image_url: { url: image } })
+  assert.deepEqual(request.response_format, {
+    type: 'json_schema', json_schema: { name: 'drawing_lesson', strict: true, schema: lessonSchema },
   })
 
   const prompt = instructions.text

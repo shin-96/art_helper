@@ -5,6 +5,7 @@ import dotenv from 'dotenv'
 import express from 'express'
 import { DEFAULT_TIMEOUT_MS, generateLesson, LessonError, LESSON_MODEL, focuses, levels } from './lesson.mjs'
 import { generateParts } from './parts.mjs'
+import { resolveAiConfig } from './ai.mjs'
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) })
 
@@ -21,8 +22,8 @@ function sendError(res, status, code, message) {
   return res.status(status).json({ error: message, code })
 }
 
-function apiKey() {
-  return process.env.OPENAI_API_KEY?.trim()
+function aiConfig() {
+  return resolveAiConfig()
 }
 
 function hasImageSignature(bytes, mime) {
@@ -77,19 +78,19 @@ app.use('/api', (_req, res, next) => {
 })
 
 app.get('/api/health', (_req, res) => {
-  const aiConfigured = Boolean(apiKey())
-  res.json({ aiConfigured, model: aiConfigured ? LESSON_MODEL : null })
+  const config = aiConfig()
+  res.json({ aiConfigured: Boolean(config), model: config ? config.model : null })
 })
 
 function requireAnalyzeRequest(req, res, next) {
-  const key = apiKey()
-  if (!key) {
-    return sendError(res, 503, 'AI_NOT_CONFIGURED', 'Chưa cấu hình khóa OpenAI. Bạn có thể dùng bài mẫu.')
+  const config = aiConfig()
+  if (!config) {
+    return sendError(res, 503, 'AI_NOT_CONFIGURED', 'Chưa cấu hình khóa AI. Thêm GEMINI_API_KEY (miễn phí) hoặc khóa AI khác vào tệp .env — hoặc dùng bài mẫu.')
   }
   if (!req.is('application/json')) {
     return sendError(res, 415, 'UNSUPPORTED_CONTENT_TYPE', 'Hãy gửi yêu cầu dưới dạng application/json.')
   }
-  res.locals.apiKey = key
+  res.locals.aiConfig = config
   next()
 }
 
@@ -115,7 +116,7 @@ app.post('/api/analyze', requireAnalyzeRequest, express.json({ limit: MAX_JSON_B
       ? configuredTimeout
       : DEFAULT_TIMEOUT_MS
     const lesson = await generateLesson({
-      apiKey: res.locals.apiKey,
+      config: res.locals.aiConfig,
       image: imageDataUrl,
       level,
       focus,
@@ -145,7 +146,7 @@ app.post('/api/parts', requireAnalyzeRequest, express.json({ limit: MAX_JSON_BYT
       ? configuredTimeout
       : DEFAULT_TIMEOUT_MS
     const result = await generateParts({
-      apiKey: res.locals.apiKey,
+      config: res.locals.aiConfig,
       image: imageDataUrl,
       timeoutMs,
       signal: controller.signal,

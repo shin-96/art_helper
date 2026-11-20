@@ -1,8 +1,8 @@
 import { STAGES } from '../src/data/stages.ts'
+import { callAiJson, DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, LessonError } from './ai.mjs'
 
-const RESPONSES_URL = 'https://api.openai.com/v1/responses'
-export const LESSON_MODEL = 'gpt-4.1-mini'
-export const DEFAULT_TIMEOUT_MS = 90_000
+export { DEFAULT_TIMEOUT_MS, LessonError }
+export const LESSON_MODEL = DEFAULT_MODEL
 
 export const levels = Object.freeze({
   beginner: 'Cơ bản',
@@ -50,15 +50,6 @@ export const lessonSchema = object({
   steps: list(stepSchema, STAGES.length, STAGES.length),
 })
 
-export class LessonError extends Error {
-  constructor(status, code, message) {
-    super(message)
-    this.name = 'LessonError'
-    this.status = status
-    this.code = code
-  }
-}
-
 function matchesSchema(value, schema) {
   switch (schema.type) {
     case 'object':
@@ -104,77 +95,19 @@ function invalidResponse() {
   return new LessonError(502, 'INVALID_AI_RESPONSE', 'AI trả về bài học không hợp lệ. Vui lòng thử lại.')
 }
 
-function getOutputText(payload) {
-  if (!payload || (payload.status && payload.status !== 'completed')) {
-    throw invalidResponse()
-  }
-
-  const content = Array.isArray(payload.output)
-    ? payload.output.flatMap((item) => item?.type === 'message' && Array.isArray(item.content) ? item.content : [])
-    : []
-  if (content.some((part) => part?.type === 'refusal')) {
-    throw new LessonError(422, 'AI_REFUSED', 'AI không thể tạo bài học từ ảnh này. Hãy thử ảnh khác.')
-  }
-
-  if (typeof payload.output_text === 'string' && payload.output_text.trim()) {
-    return payload.output_text
-  }
-  return content
-    .filter((part) => part?.type === 'output_text' && typeof part.text === 'string')
-    .map((part) => part.text)
-    .join('')
-}
-
-export async function generateLesson({ apiKey, image, level, focus, timeoutMs = DEFAULT_TIMEOUT_MS, signal }) {
-  const timeout = AbortSignal.timeout(timeoutMs)
-  const requestSignal = signal ? AbortSignal.any([timeout, signal]) : timeout
-  let payload
-  try {
-    const response = await fetch(RESPONSES_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      redirect: 'error',
-      signal: requestSignal,
-      body: JSON.stringify({
-        model: LESSON_MODEL,
-        store: false,
-        max_output_tokens: 9_000,
-        input: [{
-          role: 'user',
-          content: [
-            { type: 'input_text', text: lessonPrompt(level, focus) },
-            { type: 'input_image', image_url: image, detail: 'high' },
-          ],
-        }],
-        text: { format: { type: 'json_schema', name: 'drawing_lesson', strict: true, schema: lessonSchema } },
-      }),
-    })
-
-    if (!response.ok) {
-      // Release the upstream connection without passing provider details to the browser.
-      await response.body?.cancel()
-      if (response.status === 429) {
-        throw new LessonError(503, 'AI_UNAVAILABLE', 'AI đang bận. Vui lòng thử lại sau.')
-      }
-      throw new LessonError(502, 'AI_UPSTREAM_ERROR', 'Dịch vụ AI gặp lỗi. Vui lòng thử lại.')
-    }
-    payload = await response.json()
-  } catch (error) {
-    if (timeout.aborted) {
-      throw new LessonError(504, 'AI_TIMEOUT', 'AI mất quá nhiều thời gian để phân tích ảnh. Vui lòng thử lại.')
-    }
-    if (signal?.aborted || error instanceof LessonError) throw error
-    if (error instanceof SyntaxError) throw invalidResponse()
-    throw new LessonError(502, 'AI_UPSTREAM_ERROR', 'Không kết nối được với dịch vụ AI. Vui lòng thử lại.')
-  }
-
-  const outputText = getOutputText(payload)
-  let lesson
-  try {
-    lesson = JSON.parse(outputText)
-  } catch {
-    throw invalidResponse()
-  }
+export async function generateLesson({ config, image, level, focus, timeoutMs = DEFAULT_TIMEOUT_MS, signal }) {
+  const lesson = await callAiJson({
+    config,
+    prompt: lessonPrompt(level, focus),
+    image,
+    schema: lessonSchema,
+    schemaName: 'drawing_lesson',
+    maxOutputTokens: 9_000,
+    timeoutMs,
+    signal,
+    refusedMessage: 'AI không thể tạo bài học từ ảnh này. Hãy thử ảnh khác.',
+    timeoutMessage: 'AI mất quá nhiều thời gian để phân tích ảnh. Vui lòng thử lại.',
+  })
   if (!validateLesson(lesson)) throw invalidResponse()
   return lesson
 }
