@@ -48,6 +48,37 @@ test('có AI thì các khối gộp thành một bộ phận duy nhất và đi 
   assert.equal(parts[0].strokes.length, 12)
 })
 
+test('nét chính được xâu chuỗi liên tục: đi vòng quanh khối, đảo chiều nét khi cần, bút không nhảy xa', () => {
+  const result = fakeResult()
+  const side = (path, exterior = true) => {
+    const values = path.match(/-?\d+\.?\d*/g).map(Number)
+    const trace = makeTrace((values[0] + values[2]) / 2, (values[1] + values[3]) / 2, 0)
+    trace.path = path
+    trace.start = { x: values[0], y: values[1] }
+    trace.end = { x: values[2], y: values[3] }
+    trace.exterior = exterior
+    return trace
+  }
+  const top = side('M200 200L300 200')
+  const rightFlipped = side('M300 300L300 200')
+  const bottom = side('M300 300L200 300')
+  const left = side('M200 300L200 200')
+  const inner = side('M240 240L260 240', false)
+  result.study.contours = [bottom, top, left, rightFlipped, inner]
+  const parts = uploadedParts(result, 7)
+  assert.equal(parts.length, 1)
+  const strokes = parts[0].strokes
+  assert.deepEqual(strokes.map(s => s.path), [top.path, 'M300 200L300 300', bottom.path, left.path, inner.path],
+    `thứ tự phải đi vòng quanh khối rồi mới vào nét trong, nhận: ${strokes.map(s => s.path).join(' ; ')}`)
+  let travel = 0, prev = null
+  for (const s of strokes) {
+    const v = s.path.match(/-?\d+\.?\d*/g).map(Number)
+    if (prev) travel += Math.hypot(v[0] - prev.x, v[1] - prev.y)
+    prev = { x: v[v.length - 2], y: v[v.length - 1] }
+  }
+  assert.ok(travel < 60, `tổng quãng bút nhảy phải nhỏ, nhận ${travel.toFixed(1)}`)
+})
+
 test('bước hoàn thiện nhấn lại toàn bộ đường bao ngoài của khối, không chỉ một mép dài nhất', () => {
   const result = fakeResult()
   const exterior = [makeTrace(200, 160, 0), makeTrace(300, 250, 0), makeTrace(200, 330, 0)]

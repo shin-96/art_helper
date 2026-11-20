@@ -230,6 +230,60 @@ const sampleEvenly = <T,>(items: T[], limit: number): T[] => items.length <= lim
   ? items
   : Array.from({ length: limit }, (_, i) => items[Math.floor(i * (items.length - 1) / (limit - 1))])
 
+/** Points of an M/L polyline path, or null for paths with curves. */
+function pathPoints(path: string): ImagePoint[] | null {
+  if (/[QCSTA]/.test(path)) return null
+  const values = path.match(/-?(?:\d*\.)?\d+(?:e[-+]?\d+)?/g)?.map(Number) ?? []
+  if (values.length < 4 || values.length % 2) return null
+  const points: ImagePoint[] = []
+  for (let i = 0; i + 1 < values.length; i += 2) points.push(point(values[i], values[i + 1]))
+  return points
+}
+
+function reversedTrace(trace: ImageTrace): ImageTrace {
+  const points = pathPoints(trace.path)
+  if (!points) return trace
+  const flipped = [...points].reverse()
+  return {
+    ...trace,
+    path: flipped.map((p, i) => `${i ? 'L' : 'M'}${xy(p)}`).join(''),
+    start: trace.end, end: trace.start,
+    center: flipped[Math.floor(flipped.length / 2)],
+  }
+}
+
+/**
+ * Order strokes the way a hand draws: start near `seed` (or at the topmost
+ * stroke), then always continue with the unused stroke whose nearest end is
+ * closest to the pen's current position, flipping a stroke when its far end
+ * is the near one. The pen travels as little as possible and the outline is
+ * walked continuously instead of teleporting between fragments.
+ */
+function chainStrokes(list: ImageTrace[], seed?: ImagePoint): ImageTrace[] {
+  const remaining = [...list]
+  const ordered: ImageTrace[] = []
+  let cursor = seed
+  while (remaining.length) {
+    let pick = 0, pickDist = Infinity, flip = false
+    remaining.forEach((trace, i) => {
+      const start = trace.start ?? trace.center, end = trace.end ?? trace.center
+      if (!cursor) {
+        const key = start.y * 10000 + start.x
+        if (key < pickDist) { pickDist = key; pick = i; flip = false }
+        return
+      }
+      const ds = Math.hypot(start.x - cursor.x, start.y - cursor.y)
+      const de = Math.hypot(end.x - cursor.x, end.y - cursor.y)
+      if (Math.min(ds, de) < pickDist) { pickDist = Math.min(ds, de); pick = i; flip = de < ds }
+    })
+    let next = remaining.splice(pick, 1)[0]
+    if (flip) next = reversedTrace(next)
+    ordered.push(next)
+    cursor = next.end ?? next.center
+  }
+  return ordered
+}
+
 /**
  * Teach one body part at a time. Traces are grouped by the AI-named part they
  * fall in (or by detected form when there is no AI), groups follow the part
@@ -264,8 +318,19 @@ function tracedParts(result: ProcessedImage, layer: TraceLayer, traces: ImageTra
   }
   const perPartCap = layer === 'tone' || layer === 'shadow' ? 12 : layer === 'detail' ? 14 : Number.POSITIVE_INFINITY
   return [...grouped.values()].sort((a, b) => a.order - b.order).map((group, groupIndex) => {
-    const sorted = layer === 'contour' ? group.list : [...group.list].sort((a, b) => a.center.y - b.center.y || a.center.x - b.center.x)
-    const ordered = sampleEvenly(sorted, perPartCap)
+    let ordered: ImageTrace[]
+    if (layer === 'contour' || layer === 'detail') {
+      // Line layers are drawn, not scanned: walk the outline continuously,
+      // then continue into the interior lines from wherever the pen stopped.
+      const pool = layer === 'detail'
+        ? sampleEvenly([...group.list].sort((a, b) => a.center.y - b.center.y || a.center.x - b.center.x), perPartCap)
+        : group.list
+      const chainedExterior = chainStrokes(pool.filter(trace => trace.exterior))
+      const last = chainedExterior[chainedExterior.length - 1]
+      ordered = [...chainedExterior, ...chainStrokes(pool.filter(trace => !trace.exterior), last ? (last.end ?? last.center) : undefined)]
+    } else {
+      ordered = sampleEvenly([...group.list].sort((a, b) => a.center.y - b.center.y || a.center.x - b.center.x), perPartCap)
+    }
     const bounds = boundsOf(ordered)
     const label = group.name
       ? `${text.label} · ${group.name}`
