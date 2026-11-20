@@ -1,5 +1,6 @@
 import { useId } from 'react'
 import type { GuidedPart, PracticeMode } from '../lib/guidedDrawing'
+import type { PracticeScore } from '../lib/practice'
 
 interface FocusGuideProps {
   parts: GuidedPart[]
@@ -13,6 +14,11 @@ interface FocusGuideProps {
   onReplayLesson: () => void
   onPartChange: (index: number) => void
   onStrokeChange: (index: number) => void
+  practice?: boolean
+  practiceResult?: PracticeScore | null
+  onTogglePractice?: () => void
+  onAcceptPractice?: () => void
+  onRetryPractice?: () => void
 }
 
 const stages = [
@@ -41,6 +47,11 @@ export default function FocusGuide({
   onReplayLesson,
   onPartChange,
   onStrokeChange,
+  practice = false,
+  practiceResult = null,
+  onTogglePractice,
+  onAcceptPractice,
+  onRetryPractice,
 }: FocusGuideProps) {
   const headingId = useId()
   const part = parts[partIndex]
@@ -120,6 +131,33 @@ export default function FocusGuide({
         <div className="focus-correction">
           <p><strong>Quan sát cách chỉnh nét</strong>{part.correction}</p>
           <p><strong>Dấu hiệu cần quan sát</strong>{part.checkpoint}</p>
+        </div>
+      )}
+
+      {onTogglePractice && (
+        <div className="practice-box">
+          <button type="button" className={'focus-button ' + (practice ? 'focus-primary' : 'focus-secondary')} onClick={onTogglePractice} aria-pressed={practice}>
+            {practice ? 'Đang tự luyện — bấm để xem máy vẽ' : 'Tự vẽ nét này'}
+          </button>
+          {practice && !practiceResult && (
+            <p className="practice-hint">Vẽ đè bằng chuột hoặc ngón tay lên nét đứt mờ trên giấy. Nhấc tay ra là máy chấm nét của bạn ngay.</p>
+          )}
+          {practice && practiceResult && (
+            <div className="practice-result" role="status">
+              <p className="practice-score">Điểm nét này: <strong>{practiceResult.score} / 100</strong></p>
+              <p>{practiceResult.feedback}</p>
+              <div className="focus-stage-actions">
+                <button type="button" className="focus-button focus-secondary" onClick={onRetryPractice}>
+                  Vẽ lại nét này
+                </button>
+                {practiceResult.score >= 65 && (
+                  <button type="button" className="focus-button focus-primary" onClick={onAcceptPractice}>
+                    Nhận nét này, sang nét kế
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

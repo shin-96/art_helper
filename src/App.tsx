@@ -8,6 +8,7 @@ import {
 import DrawingBoard, { type DrawingBoardHandle } from './components/DrawingBoard'
 import FocusGuide from './components/FocusGuide'
 import { materialize, type GuidedPart, type PracticeMode, type SketchStroke } from './lib/guidedDrawing'
+import type { PracticeScore } from './lib/practice'
 import { SAMPLE_LESSON } from './data/lessons'
 import { STAGES, createLesson } from './data/stages'
 import type { Lesson } from './types'
@@ -21,6 +22,8 @@ export default function App() {
   const [partIndex, setPartIndex] = useState(0)
   const [strokeIndex, setStrokeIndex] = useState(0)
   const [mode, setMode] = useState<PracticeMode>('identify')
+  const [practice, setPractice] = useState(false)
+  const [practiceResult, setPracticeResult] = useState<PracticeScore | null>(null)
   const [finishedSteps, setFinishedSteps] = useState<number[]>([])
   const [sketchStrokes, setSketchStrokes] = useState<SketchStroke[]>([])
   const [replayToken, setReplayToken] = useState(0)
@@ -65,29 +68,49 @@ export default function App() {
   const resetDemonstration = () => {
     setFinishedSteps([]); setSketchStrokes([])
     setPartIndex(0); setStrokeIndex(0); setMode('identify'); setIsPlaying(true)
+    setPractice(false); setPracticeResult(null)
     setReplayToken(token => token + 1)
+  }
+  const togglePractice = () => {
+    setPracticeResult(null)
+    setPractice(on => {
+      if (!on) setIsPlaying(false)
+      return !on
+    })
+  }
+  const acceptPracticeStroke = () => {
+    if (!currentPart) return
+    const stroke = currentPart.strokes[strokeIndex]
+    if (!stroke) return
+    const key = `${activeStep}:${currentPart.id}:${strokeIndex}`
+    setSketchStrokes(strokes => strokes.some(item => item.key === key) ? strokes : [...strokes, { ...stroke, key, step: activeStep, partId: currentPart.id }])
+    setPracticeResult(null)
+    if (strokeIndex + 1 < currentPart.strokes.length) setStrokeIndex(strokeIndex + 1)
+    else setMode('correct')
   }
   const goToStep = (index: number) => {
     if (index < 0 || index >= lesson.steps.length) return
     setSketchStrokes(materialize(plans, index))
     setActiveStep(index); setPartIndex(0); setStrokeIndex(0); setMode('identify')
+    setPractice(false); setPracticeResult(null)
     setReplayToken(token => token + 1)
   }
   const changePart = (index: number) => {
     if (index < 0 || index >= parts.length) return
     setSketchStrokes([...materialize(plans, activeStep), ...parts.slice(0,index).flatMap(part => part.strokes.map((stroke,i) => ({...stroke,step:activeStep,partId:part.id,key: `${activeStep}:${part.id}:${i}`})))])
     setPartIndex(index); setStrokeIndex(0); setMode('identify')
+    setPracticeResult(null)
     setReplayToken(token => token + 1)
   }
   const replayPart = () => {
     setSketchStrokes([...materialize(plans, activeStep), ...parts.slice(0,partIndex).flatMap(part => part.strokes.map((stroke,i) => ({...stroke,step:activeStep,partId:part.id,key: `${activeStep}:${part.id}:${i}`})))])
-    setStrokeIndex(0); setMode('identify'); setIsPlaying(true); setReplayToken(token => token + 1)
+    setStrokeIndex(0); setMode('identify'); setIsPlaying(true); setPracticeResult(null); setReplayToken(token => token + 1)
   }
   const replayLesson = () => { resetDemonstration(); setActiveStep(0) }
   const changeStroke = (index: number) => {
     if (!currentPart?.strokes[index]) return
     setSketchStrokes(strokes => strokes.filter(stroke => stroke.step !== activeStep || stroke.partId !== currentPart.id || Number(stroke.key.split(':').at(-1)) < index))
-    setStrokeIndex(index); setMode('draw'); setReplayToken(token => token + 1)
+    setStrokeIndex(index); setMode('draw'); setPracticeResult(null); setReplayToken(token => token + 1)
   }
   const finishStroke = () => {
     if (!isPlaying || !currentPart) return
@@ -279,10 +302,10 @@ export default function App() {
           <div className="stage-toolbar"><div className="stage-breadcrumb"><span>BUỔI 01</span><ChevronRight size={13}/><strong>{currentStep?.shortTitle ?? 'Quan sát'}</strong></div><div className="stage-controls"><span className="control-caption">BÀN VẼ</span><button className={'toolbar-icon ' + (showGrid ? 'toolbar-selected' : '')} title="Bật lưới tỷ lệ" aria-label="Bật lưới tỷ lệ" onClick={() => setShowGrid(!showGrid)}><Grid2X2 size={15}/></button><button className={'toolbar-icon ' + (showReference ? 'toolbar-selected' : '')} title="Bật/tắt ảnh mẫu phủ mờ" aria-label="Bật/tắt ảnh mẫu phủ mờ" onClick={() => setShowReference(!showReference)}><Eye size={15}/></button><span className="toolbar-separator"/><button className="toolbar-icon" title="Thu nhỏ" aria-label="Thu nhỏ" onClick={() => setZoom(Math.max(70, zoom - 10))}><ZoomOut size={15}/></button><button className="zoom-value" onClick={() => setZoom(100)} title="Đưa về 100%">{zoom}%</button><button className="toolbar-icon" title="Phóng to" aria-label="Phóng to" onClick={() => setZoom(Math.min(130, zoom + 10))}><ZoomIn size={15}/></button><span className="toolbar-separator"/><button className="toolbar-icon" title="Tải tranh về máy" aria-label="Tải tranh về máy" onClick={savePNG}><ArrowDown size={15}/></button></div></div>
           <div className={'canvas-mat ' + (dragging ? 'canvas-dragging' : '')}>
             {dragging && <div className="drop-overlay"><span><CloudUpload size={34}/><b>Thả ảnh vào đây</b><small>Mình sẽ bắt đầu dựng bài học từ ảnh của bạn.</small></span></div>}
-            <DrawingBoard ref={boardRef} imageUrl={reference} step={activeStep} partIndex={partIndex} strokeIndex={strokeIndex} mode={mode} onPlansReady={setPlans} sketchStrokes={sketchStrokes} replayToken={replayToken} grid={showGrid} guides={showGuides} showReference={showReference} zoom={zoom} isPlaying={isPlaying && (mode === 'simulate' || mode === 'draw')} playbackSpeed={playbackSpeed} onPlaybackEnd={finishStroke} onProgress={(progress:number) => { if (progress > 0) setApiMessage('') }}/>
+            <DrawingBoard ref={boardRef} imageUrl={reference} step={activeStep} partIndex={partIndex} strokeIndex={strokeIndex} mode={mode} onPlansReady={setPlans} sketchStrokes={sketchStrokes} replayToken={replayToken} grid={showGrid} guides={showGuides} showReference={showReference} zoom={zoom} isPlaying={isPlaying && (mode === 'simulate' || mode === 'draw')} playbackSpeed={playbackSpeed} onPlaybackEnd={finishStroke} onProgress={(progress:number) => { if (progress > 0) setApiMessage('') }} practice={practice} onPracticeScore={setPracticeResult}/>
             <div className="canvas-corner-label"><span className="corner-registration">＋</span> GIẤY ĐỊNH LƯỢNG 200 GSM <span className="canvas-corner-dot"/></div>
           </div>
-          <div className="under-canvas"><span className="drawing-hint"><span/>Ứng dụng tự vẽ · kéo giấy để di chuyển</span><button className={'guides-toggle ' + (showGuides ? 'guides-on' : '')} onClick={() => setShowGuides(!showGuides)}><i/>{showGuides ? 'Khối hướng dẫn đang bật' : 'Hiện khối hướng dẫn'}</button></div>
+          <div className="under-canvas"><span className="drawing-hint"><span/>{practice ? 'Đang tự luyện · vẽ đè lên nét đứt mờ trên giấy' : 'Ứng dụng tự vẽ · kéo giấy để di chuyển'}</span><button className={'guides-toggle ' + (showGuides ? 'guides-on' : '')} onClick={() => setShowGuides(!showGuides)}><i/>{showGuides ? 'Khối hướng dẫn đang bật' : 'Hiện khối hướng dẫn'}</button></div>
           <div className="playback-strip"><div className="playback-label"><span className="playback-symbol">↗</span><div><span>TẬP TRUNG MỘT PHẦN, TỪNG NÉT MỘT</span><small>Tự đặt bút, phác nét và chuyển phần. Bạn chỉ cần quan sát.</small></div></div><div className="playback-actions"><button className="speed-select" onClick={() => setPlaybackSpeed(s => s === 1 ? 2 : s === 2 ? 4 : s === 4 ? 0.5 : 1)} title="Đổi tốc độ vẽ"><span>{playbackSpeed}×</span><ChevronDown size={12}/></button><button className={'replay-button ' + (isPlaying ? 'replay-playing' : '')} onClick={() => isPlaying ? stopPlay() : handlePlay()}><span className="replay-icon">{isPlaying ? <span className="play-pause"/> : <Play size={12} fill="currentColor"/>}</span><span>{isPlaying ? 'Tạm dừng tự vẽ' : 'Tiếp tục tự vẽ'}</span>{!isPlaying && <ArrowRight size={13}/>}</button></div></div>
         </section>
 
@@ -296,7 +319,7 @@ export default function App() {
             <div className="step-scroll" key={activeStep}>
               <div className="step-kicker"><span className="step-kicker-number">BƯỚC {String(activeStep + 1).padStart(2, '0')}</span><span className="step-kicker-dot">·</span><span>{currentStage.label.toUpperCase()}</span><span className="step-kicker-time"><Clock3 size={12}/>{currentStep?.duration ?? 2} phút</span></div>
               <h2 className="step-title">{currentStep?.title ?? 'Quan sát thật kỹ'}</h2>
-              <FocusGuide parts={parts} partIndex={partIndex} strokeIndex={strokeIndex} mode={mode} isPlaying={isPlaying} drawnStrokes={drawnStrokes} onTogglePlay={() => isPlaying ? stopPlay() : handlePlay()} onReplayPart={replayPart} onReplayLesson={replayLesson} onPartChange={changePart} onStrokeChange={changeStroke}/>
+              <FocusGuide parts={parts} partIndex={partIndex} strokeIndex={strokeIndex} mode={mode} isPlaying={isPlaying} drawnStrokes={drawnStrokes} onTogglePlay={() => isPlaying ? stopPlay() : handlePlay()} onReplayPart={replayPart} onReplayLesson={replayLesson} onPartChange={changePart} onStrokeChange={changeStroke} practice={practice} practiceResult={practiceResult} onTogglePractice={togglePractice} onAcceptPractice={acceptPracticeStroke} onRetryPractice={() => setPracticeResult(null)}/>
               <details className="lesson-context"><summary>Đọc thêm hướng dẫn của bước này</summary><p className="step-description">{currentStep?.description}</p><ol className="action-list">{currentStep?.actions.map((action,i) => <li key={i}><span className="action-number">{i+1}</span><span>{action}</span></li>)}</ol><div className="visual-note"><Eye size={14}/><p>{currentStep?.checkpoint}</p></div></details>
               {currentStep?.tip && <div className="tip-card"><span className="tip-card-icon"><Lightbulb size={15}/></span><div><strong>Mách nhỏ</strong><p>{currentStep.tip}</p></div></div>}
               {currentStep?.mistake && <div className="mistake-card"><span className="mistake-card-mark">!</span><div><strong>Né lỗi này nhé</strong><p>{currentStep.mistake}</p></div></div>}

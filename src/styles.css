@@ -387,6 +387,14 @@ button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #c58
 .focus-check input { width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--olive-dark); }
 .focus-check input:focus-visible { outline: 3px solid #c58c5a; outline-offset: 2px; }
 .focus-check strong { display: block; }
+.practice-box { display: grid; gap: 7px; padding: 9px; border: 1px dashed #b9c2a6; border-radius: 6px; background: #f6f4ec; }
+.practice-box .focus-button { width: 100%; }
+.practice-hint { color: var(--ink-soft); font-size: 11px; }
+.practice-result { display: grid; gap: 7px; font-size: 12px; }
+.practice-score { color: var(--olive-dark); font-size: 13px; }
+.practice-score strong { font-size: 15px; }
+.practice-result .focus-stage-actions { flex-direction: column; }
+.practice-result .focus-stage-actions .focus-button { width: 100%; flex: none; }
 .focus-gate { color: var(--ink-soft); font-size: 11px; }
 .focus-stage-actions { display: flex; gap: 6px; }
 .focus-stage-actions .focus-primary { flex: 1; }

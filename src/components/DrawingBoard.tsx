@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useId, useImperativeHandle, useMemo
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { processImage, rasterizeSvg } from '../lib/imageProcessing'
 import type { ProcessedImage } from '../lib/imageProcessing'
+import { scoreStroke, type PracticeScore } from '../lib/practice'
 import { normalizeParts, uploadedParts, type GuidedPart, type PracticeMode, type SketchStroke, type StrokeStyle } from '../lib/guidedDrawing'
 import { STAGES } from '../data/stages'
 
@@ -23,11 +24,15 @@ export interface DrawingBoardProps {
   playbackSpeed: number
   onPlaybackEnd: () => void
   onProgress?: (n: number) => void
+  /** When true, pointer input draws the current stroke instead of panning,
+   *  and the finished attempt is scored against the demonstrated stroke. */
+  practice?: boolean
+  onPracticeScore?: (result: PracticeScore) => void
 }
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 const appearance = (stroke: StrokeStyle) => ({ stroke: stroke.color ?? (stroke.kind === 'construction' ? '#b58668' : '#3e453c'), strokeWidth: stroke.width ?? 1.4, opacity: stroke.opacity ?? (stroke.kind === 'construction' ? .55 : .85) })
 
-const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function DrawingBoard({ imageUrl, step, partIndex, strokeIndex, mode, onPlansReady, sketchStrokes, replayToken, grid, guides, showReference, zoom, isPlaying, playbackSpeed, onPlaybackEnd, onProgress }, ref) {
+const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function DrawingBoard({ imageUrl, step, partIndex, strokeIndex, mode, onPlansReady, sketchStrokes, replayToken, grid, guides, showReference, zoom, isPlaying, playbackSpeed, onPlaybackEnd, onProgress, practice = false, onPracticeScore }, ref) {
   const id = `sketch-${useId().replace(/[^a-zA-Z0-9]/g,'')}`
   const source = imageUrl ?? '/pear-reference.svg'
   const [loaded, setLoaded] = useState<{ source: string; result: ProcessedImage } | null>(null)
@@ -51,6 +56,8 @@ const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function 
   const keyRef = useRef('')
   const [pan,setPan] = useState({x:0,y:0})
   const pointer = useRef<{id:number;x:number;y:number;px:number;py:number} | null>(null)
+  const [drawnPoints, setDrawnPoints] = useState<{x:number;y:number}[]>([])
+  const drawingRef = useRef(false)
   const scale = clamp(zoom/100,.5,2)
 
   useEffect(() => {
@@ -62,7 +69,7 @@ const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function 
     return () => { canceled=true }
   },[source,retry])
   useEffect(() => {
-    if(keyRef.current !== playbackKey) { keyRef.current=playbackKey;progressRef.current=0;setProgress(0) }
+    if(keyRef.current !== playbackKey) { keyRef.current=playbackKey;progressRef.current=0;setProgress(0);setDrawnPoints([]) }
     const path=pathRef.current
     if(!path) {setEndpoints(null);return}
     const start=path.getPointAtLength(0), end=path.getPointAtLength(path.getTotalLength())
@@ -71,7 +78,7 @@ const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function 
     setPoint({x:p.x,y:p.y})
   },[playbackKey,target])
   useEffect(() => {
-    if(!isPlaying || !target || !pathRef.current || !result) return
+    if(practice || !isPlaying || !target || !pathRef.current || !result) return
     let frame=0, start:number | null=null, canceled=false
     const path=pathRef.current, length=path.getTotalLength()
     const duration=(mode === 'simulate' ? 650 : clamp(length*6,350,2200))/Math.max(.1,playbackSpeed)
@@ -88,7 +95,7 @@ const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function 
     }
     frame=requestAnimationFrame(animate)
     return () => {canceled=true;cancelAnimationFrame(frame)}
-  },[isPlaying,target,playbackSpeed,playbackKey,mode,result])
+  },[isPlaying,target,playbackSpeed,playbackKey,mode,result,practice])
 
   const exportBoard=useCallback(async () => {
     if(!svgRef.current)return
@@ -103,16 +110,50 @@ const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function 
   },[step])
   useImperativeHandle(ref,()=>({exportPng(){void exportBoard()}}),[exportBoard])
   useEffect(()=> {if(!feedback)return;const timer=setTimeout(()=>setFeedback(''),3000);return()=>clearTimeout(timer)},[feedback])
+  const toBoardPoint=(event:ReactPointerEvent<HTMLDivElement>)=> {
+    const rect=svgRef.current?.getBoundingClientRect()
+    if(!rect || !rect.width || !rect.height)return null
+    return {x:(event.clientX-rect.left)/rect.width*800,y:(event.clientY-rect.top)/rect.height*640}
+  }
   const down=(event:ReactPointerEvent<HTMLDivElement>)=> {
-    if(pointer.current || event.button!==0)return
+    if(event.button!==0)return
+    if(practice && target) {
+      const point=toBoardPoint(event)
+      if(!point)return
+      event.currentTarget.setPointerCapture(event.pointerId)
+      drawingRef.current=true
+      setDrawnPoints([point])
+      return
+    }
+    if(pointer.current)return
     event.currentTarget.setPointerCapture(event.pointerId)
     pointer.current={id:event.pointerId,x:event.clientX,y:event.clientY,px:pan.x,py:pan.y}
   }
   const move=(event:ReactPointerEvent<HTMLDivElement>)=> {
+    if(drawingRef.current) {
+      const point=toBoardPoint(event)
+      if(!point)return
+      setDrawnPoints(points=> {
+        const last=points[points.length-1]
+        return last && Math.hypot(point.x-last.x,point.y-last.y)<2.5 ? points : [...points,point]
+      })
+      return
+    }
     const p=pointer.current;if(!p || p.id!==event.pointerId)return
     setPan({x:p.px+event.clientX-p.x,y:p.py+event.clientY-p.y})
   }
   const up=(event:ReactPointerEvent<HTMLDivElement>)=> {
+    if(drawingRef.current) {
+      drawingRef.current=false
+      if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId)
+      const path=pathRef.current
+      if(path && drawnPoints.length>3) {
+        const length=path.getTotalLength()
+        const samples=Array.from({length:48},(_,i)=> { const p=path.getPointAtLength(length*i/47); return {x:p.x,y:p.y} })
+        onPracticeScore?.(scoreStroke(samples,drawnPoints))
+      }
+      return
+    }
     if(pointer.current?.id!==event.pointerId)return
     pointer.current=null;if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId)
   }
@@ -125,7 +166,7 @@ const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function 
   const bounds=part?.bounds
   return <div className="drawing-board drawing-tool-hand" data-mode={mode} data-step={step} data-stage={STAGES[step].id} data-part={part?.id??''} data-stroke={strokeIndex} data-ready={Boolean(result)}>
     <div className="drawing-paper-label">TỰ PHÁC THẢO · {STAGES[step].label.toUpperCase()}</div>
-    <div className="drawing-board-viewport" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} style={{touchAction:'none',cursor:'grab'}}>
+    <div className="drawing-board-viewport" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} style={{touchAction:'none',cursor:practice?'crosshair':'grab'}}>
       <div className="drawing-board-plane" style={{transform:`translate(${pan.x}px,${pan.y}px) scale(${scale})`}}>
         <svg ref={svgRef} className="drawing-artwork" viewBox="0 0 800 640" role="img" aria-label={`Tự vẽ ${STAGES[step].label} từ ảnh tham chiếu`}>
           <defs>
@@ -147,6 +188,8 @@ const DrawingBoard = forwardRef<DrawingBoardHandle, DrawingBoardProps>(function 
             {guides&&mode==='identify'&&part?.strokes.map((stroke,index)=><path key={index} d={stroke.path} stroke="#b08060" strokeWidth="1" opacity=".12"/>) }
           </g>
           {target&&<path ref={pathRef} data-drawing-no-export={erasing||checking||mode!=='draw'?'true':undefined} data-current-kind={target.kind??'ink'} d={target.path} fill="none" {...appearance(target)} stroke={erasing?'#e3a17a':checking?'#69865a':target.color??'#576749'} strokeWidth={erasing?2:target.width??1.6} opacity={!demonstrating?0:mode==='simulate'?.3:erasing?.2:target.opacity??.85} strokeLinecap="round" strokeLinejoin="round" pathLength="1" strokeDasharray="1" strokeDashoffset={1-progress}/>} 
+          {practice&&target&&<path data-drawing-no-export="true" d={target.path} fill="none" stroke="#718358" strokeWidth={(target.width??1.6)+1.1} opacity=".45" strokeDasharray="7 7" strokeLinecap="round" strokeLinejoin="round"/>}
+          {drawnPoints.length>1&&<path data-drawing-no-export="true" d={drawnPoints.map((p,i)=>`${i?'L':'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('')} fill="none" stroke="#b3543f" strokeWidth="2.4" opacity=".92" strokeLinecap="round" strokeLinejoin="round"/>}
           {endpoints&&demonstrating&&<g data-drawing-no-export="true" fontSize="9" fill="#647c4e"><circle cx={endpoints.start.x} cy={endpoints.start.y} r="3"/><circle cx={endpoints.end.x} cy={endpoints.end.y} r="3" fill="#af7858"/></g>}
           {target&&demonstrating&&progress<1&&<g data-drawing-no-export="true" data-pen="true" transform={`translate(${point.x} ${point.y}) rotate(30)`}>
             {erasing?<rect x="-7" y="-16" width="14" height="16" rx="3" fill="#e4b19a" stroke="#ad7965"/>:<><path d="M0 0L-4-12V-61q4-5 8 0v49Z" fill={target.kind==='color'?target.color:'#b78657'} stroke="#75604c" strokeWidth=".8"/><path d="M0 0L-4-12h8Z" fill="#ebd5af"/><path d="M0 0l-1.5-4h3Z" fill="#41493c"/></>}
