@@ -32,6 +32,9 @@ async function probeModels() {
     const payload = await response.json()
     const ids = (payload.data ?? []).map((entry) => entry.id).filter(Boolean)
     console.log(`  → Key này truy cập được ${ids.length} model: ${ids.slice(0, 40).join(', ') || '(danh sách trống)'}`)
+    const { pickDiscoveredModels } = await import('../server/ai.mjs')
+    const chat = pickDiscoveredModels(ids)
+    if (chat.length) console.log(`  → Model chat/vision phù hợp nhất: ${chat.join(', ')}`)
   } catch {
     console.log('  → Không hỏi được danh sách model (lỗi mạng).')
   }

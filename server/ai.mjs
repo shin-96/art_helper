@@ -70,12 +70,59 @@ function invalidResponse() {
 // answers is remembered for the rest of the process.
 const workingModels = new Map()
 
+// Newer Gemini keys can be locked to a newer model generation, so even a
+// sensible static chain can miss every name. When the whole chain 404s,
+// ask the provider which models this key can actually reach and try the
+// chat/vision ones, in both bare and models/-prefixed spellings.
+const NOT_CHAT_MODEL = ['tts', 'image', 'audio', 'embedding', 'lyria', 'video', 'robotics', 'computer-use', 'deep-research']
+const discoveredModels = new Map()
+
+export function pickDiscoveredModels(ids) {
+  const scored = []
+  for (const raw of ids) {
+    if (typeof raw !== 'string') continue
+    const bare = raw.replace(/^models\//, '')
+    if (!bare.startsWith('gemini') || NOT_CHAT_MODEL.some(word => bare.includes(word))) continue
+    const version = Number(bare.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] ?? 0)
+    const score = (bare.includes('flash') ? 0 : bare.includes('pro') ? 1 : 2)
+      + (bare.includes('lite') ? 0.5 : 0) - version
+    scored.push({ bare, raw, score })
+  }
+  scored.sort((a, b) => a.score - b.score)
+  const names = []
+  for (const entry of scored.slice(0, 3)) {
+    names.push(entry.bare)
+    if (entry.raw !== entry.bare) names.push(entry.raw)
+  }
+  return names
+}
+
+async function discoverModels(config, cacheKey) {
+  if (discoveredModels.has(cacheKey)) return discoveredModels.get(cacheKey)
+  let names = []
+  try {
+    const response = await fetch(`${config.baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${config.token}` },
+      redirect: 'error',
+    })
+    if (response.ok) {
+      const payload = await response.json()
+      names = pickDiscoveredModels((payload.data ?? []).map(entry => entry?.id))
+      if (names.length) console.error(`[ai] provider=${config.provider} discovered models for this key: ${names.join(', ')}`)
+    }
+  } catch { /* Discovery is best-effort; the static chain's error stands. */ }
+  discoveredModels.set(cacheKey, names)
+  return names
+}
+
 export async function callAiJson({ config, ...rest }) {
   const cacheKey = `${config.provider}|${config.baseUrl}`
   const remembered = workingModels.get(cacheKey)
   const candidates = [...new Set([remembered, ...(config.models ?? [config.model])].filter(Boolean))]
   let lastError
-  for (const model of candidates) {
+  let discovered = false
+  for (let index = 0; index < candidates.length; index++) {
+    const model = candidates[index]
     try {
       const parsed = await callOnce({ config, model, ...rest })
       if (remembered !== model) workingModels.set(cacheKey, model)
@@ -84,6 +131,11 @@ export async function callAiJson({ config, ...rest }) {
       lastError = error
       if (error?.upstreamStatus !== 404) throw error
       console.error(`[ai] provider=${config.provider} model=${model} returned 404; trying the next model`)
+      if (index === candidates.length - 1 && config.provider === 'gemini' && !discovered) {
+        discovered = true
+        const found = await discoverModels(config, cacheKey)
+        for (const name of found) if (!candidates.includes(name)) candidates.push(name)
+      }
     }
   }
   throw lastError

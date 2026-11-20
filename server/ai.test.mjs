@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { callAiJson, LessonError, resolveAiConfig } from './ai.mjs'
+import { callAiJson, LessonError, pickDiscoveredModels, resolveAiConfig } from './ai.mjs'
 
 test('resolveAiConfig: không có key nào thì null để app dùng fallback local', () => {
   assert.equal(resolveAiConfig({}), null)
@@ -90,4 +90,38 @@ test('callAiJson lùi sang model kế khi model đầu trả 404 và nhớ model
   assert.deepEqual(seen, ['m-a', 'm-b'])
   assert.deepEqual(await askChain(), { ok: true })
   assert.deepEqual(seen, ['m-a', 'm-b', 'm-b'])
+})
+
+test('pickDiscoveredModels lọc model chat/vision, ưu tiên flash bản mới, giữ cả hai cách viết tên', () => {
+  const names = pickDiscoveredModels([
+    'models/gemini-3.1-flash-tts-preview',
+    'models/lyria-3.5',
+    'models/gemini-2.0-flash',
+    'models/gemini-3.5-flash',
+    'models/gemini-3.5-flash-lite',
+    'models/gemini-3-pro',
+    'models/text-embedding-004',
+  ])
+  assert.deepEqual(names, [
+    'gemini-3.5-flash', 'models/gemini-3.5-flash',
+    'gemini-3.5-flash-lite', 'models/gemini-3.5-flash-lite',
+    'gemini-2.0-flash', 'models/gemini-2.0-flash',
+  ])
+})
+
+test('callAiJson tự phát hiện model qua /models khi cả chuỗi tĩnh đều 404', async (t) => {
+  const seen = []
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    if (String(url).endsWith('/models')) {
+      return Response.json({ data: [{ id: 'models/lyria-3.5' }, { id: 'models/gemini-9-flash' }] })
+    }
+    const model = JSON.parse(init.body).model
+    seen.push(model)
+    if (model !== 'gemini-9-flash') return new Response('not found', { status: 404 })
+    return Response.json({ choices: [{ message: { content: '{"ok":true}' } }] })
+  })
+  const config = { provider: 'gemini', token: 'k', baseUrl: 'https://discovery.example.invalid/v1', model: 'gone', models: ['gone'] }
+  const ask = () => callAiJson({ config, prompt: 'p', image: 'data:image/png;base64,x', schema: { type: 'object' }, schemaName: 't', refusedMessage: 'r', timeoutMessage: 't' })
+  assert.deepEqual(await ask(), { ok: true })
+  assert.deepEqual(seen, ['gone', 'gemini-9-flash'])
 })
